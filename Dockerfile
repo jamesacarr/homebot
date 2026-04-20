@@ -6,7 +6,9 @@ FROM node:24-alpine AS builder
 # better-sqlite3 needs a native build toolchain.
 RUN apk add --no-cache build-base python3
 
-# Enable corepack so pnpm matches what's declared in package.json (if pinned).
+# Skip husky hook installation inside Docker (no .git, not needed).
+ENV HUSKY=0
+
 RUN corepack enable
 
 WORKDIR /app
@@ -22,10 +24,17 @@ COPY src ./src
 RUN pnpm build
 
 # Strip devDependencies from node_modules for the runtime stage.
-RUN pnpm prune --prod
+# --ignore-scripts prevents prune from re-running `prepare` (which invokes
+# husky, now missing because it's a dev dep).
+RUN pnpm prune --prod --ignore-scripts
 
 # --- Production stage ------------------------------------------------------
 FROM node:24-alpine AS production
+
+# Build-time arg populated by CI from the commit SHA; surfaced at runtime
+# so the /health endpoint can report which version is running.
+ARG VERSION=dev
+ENV HOMEBOT_VERSION=$VERSION
 
 # curl: used by the compose-level healthcheck.
 RUN apk add --no-cache curl \
