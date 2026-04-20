@@ -110,7 +110,13 @@ function buildToolResultMessage(
 }
 
 interface TurnToolHistory {
-  lastSearchCandidates: SearchCandidate[] | null;
+  /**
+   * Candidates from the most recent `search_media`, ONLY if that search was
+   * the last tool the LLM called this turn. If a later tool call supersedes
+   * it (`get_media_details`, `request_media`), this is cleared — the LLM has
+   * moved past disambiguation and the picker is no longer the right reply.
+   */
+  pendingPickerCandidates: SearchCandidate[] | null;
   /** Set when `request_media` returned `status='requested'` in this turn. */
   lastSuccessfulRequest: { tmdbId: number; posterUrl: string | null } | null;
 }
@@ -119,11 +125,16 @@ function updateHistory(
   history: TurnToolHistory,
   result: ToolDispatchResult,
 ): void {
+  // Any later tool call means the LLM has drilled past picker territory;
+  // drop the pending candidates so the reply renderer doesn't render a stale
+  // picker alongside the LLM's follow-up text.
+  history.pendingPickerCandidates = null;
+
   if (result.isError) {
     return;
   }
   if (result.name === 'search_media') {
-    history.lastSearchCandidates = result.output.candidates;
+    history.pendingPickerCandidates = result.output.candidates;
     return;
   }
   if (result.name === 'request_media') {
@@ -136,18 +147,23 @@ function updateHistory(
   }
 }
 
+type Pickable = SearchCandidate & { posterUrl: string };
+
+function hasPoster(candidate: SearchCandidate): candidate is Pickable {
+  return candidate.posterUrl !== null;
+}
+
 function buildPickerReplies(
-  candidates: SearchCandidate[],
+  pickables: Pickable[],
   assistantText: string,
 ): Reply[] {
   const replies: Reply[] = [];
   if (assistantText.length > 0) {
     replies.push({ kind: 'text', text: assistantText });
   }
-  candidates.forEach((candidate, index) => {
-    if (candidate.posterUrl === null) {
-      return;
-    }
+  // A candidate's number matches its index in the filtered list, so what the
+  // user sees ("Option 2") lines up with what they tap ([2] → pick:<id2>).
+  pickables.forEach((candidate, index) => {
     const year = candidate.year ? ` (${candidate.year})` : '';
     const overview =
       candidate.overview === null ? '' : `\n\n${candidate.overview}`;
@@ -157,7 +173,7 @@ function buildPickerReplies(
       posterUrl: candidate.posterUrl,
     });
   });
-  const buttons = candidates.map((c, index) => ({
+  const buttons = pickables.map((c, index) => ({
     data: encodePickCallback(c.tmdbId, c.mediaType),
     label: String(index + 1),
   }));
@@ -188,11 +204,18 @@ function buildFinalReplies(
     return replies;
   }
 
+  // Disambiguation path: the LLM's LAST tool call was a search_media that
+  // returned multiple candidates. Render the picker with whatever subset has
+  // posters — candidates without posters are dropped entirely so button
+  // numbers never point at invisible titles.
   if (
-    history.lastSearchCandidates !== null &&
-    history.lastSearchCandidates.length > 1
+    history.pendingPickerCandidates !== null &&
+    history.pendingPickerCandidates.length > 1
   ) {
-    return buildPickerReplies(history.lastSearchCandidates, assistantText);
+    const pickables = history.pendingPickerCandidates.filter(hasPoster);
+    if (pickables.length >= 1) {
+      return buildPickerReplies(pickables, assistantText);
+    }
   }
 
   if (assistantText.length === 0) {
@@ -232,8 +255,8 @@ export function createOrchestrator(deps: CreateOrchestratorDeps): Orchestrator {
     const newMessages: Message[] = [userMessage];
 
     const history: TurnToolHistory = {
-      lastSearchCandidates: null,
       lastSuccessfulRequest: null,
+      pendingPickerCandidates: null,
     };
 
     let costDeltaUsd = 0;

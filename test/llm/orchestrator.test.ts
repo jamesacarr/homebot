@@ -218,7 +218,10 @@ describe('orchestrator — disambiguation', () => {
     ]);
   });
 
-  it('omits the candidates without a poster URL from the photo fan-out but keeps them on the keyboard', async () => {
+  it('drops candidates without a poster URL from both the photos AND the keyboard', async () => {
+    // A keyboard button for a candidate the user can't see (no photo) is a
+    // trap — the number would point to a mystery title. Filter the whole
+    // candidate out of the picker.
     const noPoster: SearchCandidate = {
       ...batmanBegins,
       posterUrl: null,
@@ -263,7 +266,84 @@ describe('orchestrator — disambiguation', () => {
     if (keyboard?.kind !== 'keyboard') {
       throw new Error('expected a keyboard reply');
     }
-    expect(keyboard.buttons).toHaveLength(2);
+    // Only the poster-bearing candidate has a button.
+    expect(keyboard.buttons).toEqual([
+      { data: 'pick:414906:movie', label: '1' },
+    ]);
+  });
+
+  it('does NOT render a picker if the LLM called get_media_details after search_media', async () => {
+    // The picker belongs to the "search → which did you mean?" dead-end.
+    // Once the LLM has drilled down (via get_media_details) the user is past
+    // disambiguation; the LLM's text is the whole reply.
+    const overseerr = createFakeOverseerr({
+      detailsByTmdbId: new Map([
+        [
+          272,
+          {
+            cast: [{ character: 'Bruce Wayne', name: 'Christian Bale' }],
+            createdBy: [],
+            directors: ['Christopher Nolan'],
+            genres: ['Action'],
+            mediaType: 'movie',
+            networks: [],
+            overview: 'Nolan origin',
+            posterUrl: 'https://image.tmdb.org/t/p/w342/bale.jpg',
+            releaseDate: '2005-06-15',
+            runtime: 140,
+            status: null,
+            title: 'Batman Begins',
+            tmdbId: 272,
+            voteAverage: 7.7,
+            year: '2005',
+          },
+        ],
+      ]),
+      searchResults: [theBatman, batmanBegins],
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall('search_media', { query: 'Batman' }, { id: 'c1' })],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            'get_media_details',
+            { mediaType: 'movie', tmdbId: 272 },
+            { id: 'c2' },
+          ),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage(
+        'Yes — *Batman Begins* is the Bale one. Want me to request it?',
+      ),
+    ]);
+
+    const orchestrate = createOrchestrator({
+      llmModel: model,
+      logger: silentLogger,
+      overseerr,
+      systemPrompt: bareSystemPrompt(),
+      thinkingLevel: 'off',
+    });
+
+    const result = await orchestrate({
+      abortSignal: new AbortController().signal,
+      incomingText: 'is any of them the Bale one?',
+      now: 1_700_000_000_000,
+      priorMessages: [],
+      telegramUserId: 42,
+    });
+
+    expect(result.replies).toEqual([
+      {
+        kind: 'text',
+        text: 'Yes — *Batman Begins* is the Bale one. Want me to request it?',
+      },
+    ]);
   });
 });
 
