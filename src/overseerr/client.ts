@@ -73,6 +73,7 @@ export interface MediaDetails {
   title: string;
   year: string | null;
   overview: string | null;
+  posterUrl: string | null;
   releaseDate: string | null;
   runtime: number | null;
   status: MediaStatus | null;
@@ -238,6 +239,10 @@ function toDetails(raw: unknown, input: DetailsRequestInput): MediaDetails {
     mediaType: input.mediaType,
     networks,
     overview: typeof r.overview === 'string' ? r.overview : null,
+    posterUrl:
+      typeof r.posterPath === 'string'
+        ? `${TMDB_IMAGE_BASE}${r.posterPath}`
+        : null,
     releaseDate,
     runtime: typeof r.runtime === 'number' ? r.runtime : null,
     status: mapStatus(r.mediaInfo),

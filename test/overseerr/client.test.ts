@@ -254,13 +254,14 @@ describe('OverseerrClient.getMediaDetails', () => {
     id: 272,
     mediaInfo: { status: 5 },
     overview: 'A young Bruce Wayne travels to the East...',
+    posterPath: '/bale.jpg',
     releaseDate: '2005-06-15',
     runtime: 140,
     title: 'Batman Begins',
     voteAverage: 7.7,
   };
 
-  it('maps /movie/{id} into a trimmed detail projection with director, cast, and genres', async () => {
+  it('maps /movie/{id} into a trimmed detail projection with posterUrl, director, cast, and genres', async () => {
     const { calls, fetch } = makeFetchFake(
       () => new Response(JSON.stringify(movieDetails), { status: 200 }),
     );
@@ -287,6 +288,7 @@ describe('OverseerrClient.getMediaDetails', () => {
       mediaType: 'movie',
       networks: [],
       overview: 'A young Bruce Wayne travels to the East...',
+      posterUrl: 'https://image.tmdb.org/t/p/w342/bale.jpg',
       releaseDate: '2005-06-15',
       runtime: 140,
       status: 'AVAILABLE',
@@ -359,6 +361,7 @@ describe('OverseerrClient.getMediaDetails', () => {
         { id: 1, name: 'Hulu' },
       ],
       overview: 'A young chef returns home...',
+      posterPath: '/thebear.jpg',
       voteAverage: 8.6,
     };
     const { calls, fetch } = makeFetchFake(
@@ -384,6 +387,7 @@ describe('OverseerrClient.getMediaDetails', () => {
       mediaType: 'tv',
       networks: ['FX', 'Hulu'],
       overview: 'A young chef returns home...',
+      posterUrl: 'https://image.tmdb.org/t/p/w342/thebear.jpg',
       releaseDate: '2022-06-23',
       runtime: null,
       status: 'AVAILABLE',
@@ -392,6 +396,27 @@ describe('OverseerrClient.getMediaDetails', () => {
       voteAverage: 8.6,
       year: '2022',
     });
+  });
+
+  it('leaves posterUrl null when Overseerr returns no posterPath', async () => {
+    const { fetch } = makeFetchFake(
+      () =>
+        new Response(JSON.stringify({ ...movieDetails, posterPath: null }), {
+          status: 200,
+        }),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    const details = await client.getMediaDetails({
+      mediaType: 'movie',
+      tmdbId: 272,
+    });
+
+    expect(details.posterUrl).toBeNull();
   });
 
   it('throws OverseerrNotFoundError when the title does not exist', async () => {

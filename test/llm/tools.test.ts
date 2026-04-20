@@ -236,6 +236,7 @@ describe('createToolDispatcher — get_media_details', () => {
     mediaType: 'movie',
     networks: [],
     overview: 'A young Bruce Wayne travels to the East...',
+    posterUrl: 'https://image.tmdb.org/t/p/w342/bale.jpg',
     releaseDate: '2005-06-15',
     runtime: 140,
     status: 'AVAILABLE',
@@ -350,6 +351,7 @@ describe('createToolDispatcher — request_media', () => {
     mediaType: 'movie',
     networks: [],
     overview: 'Nolan origin',
+    posterUrl: 'https://image.tmdb.org/t/p/w342/bale.jpg',
     releaseDate: '2005-06-15',
     runtime: 140,
     status: null,
@@ -379,6 +381,12 @@ describe('createToolDispatcher — request_media', () => {
     expect(result.output.status).toBe('requested');
     expect(result.output.title).toBe('Batman Begins');
     expect(result.output.year).toBe('2005');
+    // posterUrl is carried through from MediaDetails so the orchestrator and
+    // the selection callback can render a confirmation poster without having
+    // to look it up separately.
+    expect(result.output.posterUrl).toBe(
+      'https://image.tmdb.org/t/p/w342/bale.jpg',
+    );
     expect(overseerr.createCalls).toEqual([
       { mediaType: 'movie', tmdbId: 272 },
     ]);

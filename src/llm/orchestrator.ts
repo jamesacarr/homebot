@@ -111,8 +111,8 @@ function buildToolResultMessage(
 
 interface TurnToolHistory {
   lastSearchCandidates: SearchCandidate[] | null;
-  hadSuccessfulRequest: boolean;
-  lastRequestedTmdbId: number | null;
+  /** Set when `request_media` returned `status='requested'` in this turn. */
+  lastSuccessfulRequest: { tmdbId: number; posterUrl: string | null } | null;
 }
 
 function updateHistory(
@@ -128,20 +128,12 @@ function updateHistory(
   }
   if (result.name === 'request_media') {
     if (result.output.status === 'requested') {
-      history.hadSuccessfulRequest = true;
-      history.lastRequestedTmdbId = result.output.tmdbId;
+      history.lastSuccessfulRequest = {
+        posterUrl: result.output.posterUrl,
+        tmdbId: result.output.tmdbId,
+      };
     }
   }
-}
-
-function findPoster(
-  candidates: SearchCandidate[] | null,
-  tmdbId: number | null,
-): string | null {
-  if (candidates === null || tmdbId === null) {
-    return null;
-  }
-  return candidates.find(c => c.tmdbId === tmdbId)?.posterUrl ?? null;
 }
 
 function buildPickerReplies(
@@ -184,15 +176,12 @@ function buildFinalReplies(
   assistantText: string,
   history: TurnToolHistory,
 ): Reply[] {
-  if (history.hadSuccessfulRequest) {
+  if (history.lastSuccessfulRequest !== null) {
     const replies: Reply[] = [];
     if (assistantText.length > 0) {
       replies.push({ kind: 'text', text: assistantText });
     }
-    const poster = findPoster(
-      history.lastSearchCandidates,
-      history.lastRequestedTmdbId,
-    );
+    const poster = history.lastSuccessfulRequest.posterUrl;
     if (poster !== null) {
       replies.push({ caption: '', kind: 'photo', posterUrl: poster });
     }
@@ -243,9 +232,8 @@ export function createOrchestrator(deps: CreateOrchestratorDeps): Orchestrator {
     const newMessages: Message[] = [userMessage];
 
     const history: TurnToolHistory = {
-      hadSuccessfulRequest: false,
-      lastRequestedTmdbId: null,
       lastSearchCandidates: null,
+      lastSuccessfulRequest: null,
     };
 
     let costDeltaUsd = 0;

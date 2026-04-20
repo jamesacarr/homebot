@@ -322,7 +322,7 @@ export function createToolDispatcher(
     return {
       mediaType: args.mediaType,
       message,
-      posterUrl: null,
+      posterUrl: details.posterUrl,
       status,
       title: details.title,
       tmdbId: args.tmdbId,
