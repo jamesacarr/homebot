@@ -1,55 +1,61 @@
+import pino, { type Logger } from 'pino';
+
+export type { Logger } from 'pino';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export interface Logger {
-  debug(event: string, fields?: Record<string, unknown>): void;
-  info(event: string, fields?: Record<string, unknown>): void;
-  warn(event: string, fields?: Record<string, unknown>): void;
-  error(event: string, fields?: Record<string, unknown>): void;
-}
-
-export interface WritableStreamLike {
-  write(chunk: string): boolean;
-}
-
 export interface CreateLoggerOptions {
+  name: string;
   level: LogLevel;
-  stream?: WritableStreamLike;
+  /** If true, uses pino-pretty for readable output. Recommended only in dev. */
+  pretty?: boolean;
 }
 
-const LEVEL_PRIORITY: Record<LogLevel, number> = {
-  debug: 10,
-  error: 40,
-  info: 20,
-  warn: 30,
-};
-
+/**
+ * Create a pino root logger. Consumers inside the app should prefer
+ * `logger.child({ module: 'foo', telegramUserId: 42 })` to bind context
+ * rather than passing fields on every call.
+ */
 export function createLogger(options: CreateLoggerOptions): Logger {
-  const stream = options.stream ?? process.stdout;
-  const minPriority = LEVEL_PRIORITY[options.level];
+  return pino({
+    level: options.level,
+    name: options.name,
+    ...(options.pretty
+      ? {
+          transport: {
+            options: { colorize: true },
+            target: 'pino-pretty',
+          },
+        }
+      : {}),
+  });
+}
 
-  const emit = (
-    level: LogLevel,
-    event: string,
-    fields?: Record<string, unknown>,
-  ): void => {
-    if (LEVEL_PRIORITY[level] < minPriority) {
-      return;
-    }
-    // Spread supplied fields first, then reserved keys, so callers can never
-    // shadow level/event/timestamp.
-    const line = JSON.stringify({
-      ...fields,
-      event,
-      level,
-      timestamp: new Date().toISOString(),
-    });
-    stream.write(`${line}\n`);
-  };
+/** A logger that discards all output. Use in tests that don't care about logs. */
+export const silentLogger: Logger = pino({ level: 'silent' });
 
-  return {
-    debug: (event, fields) => emit('debug', event, fields),
-    error: (event, fields) => emit('error', event, fields),
-    info: (event, fields) => emit('info', event, fields),
-    warn: (event, fields) => emit('warn', event, fields),
-  };
+export interface TestLogEntry {
+  level: number;
+  msg?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Returns a pino logger whose output is captured into the returned `entries`
+ * array. Use in tests that need to assert on log output.
+ */
+export function createTestLogger(): {
+  logger: Logger;
+  entries: TestLogEntry[];
+} {
+  const entries: TestLogEntry[] = [];
+  const logger = pino(
+    { level: 'trace' },
+    {
+      write(chunk: string): void {
+        entries.push(JSON.parse(chunk) as TestLogEntry);
+      },
+    },
+  );
+  return { entries, logger };
 }

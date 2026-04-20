@@ -1,84 +1,71 @@
 import { describe, expect, it } from 'vitest';
 
-import { createLogger } from '../src/logging.js';
-
-class CapturingStream {
-  public readonly writes: string[] = [];
-
-  write(chunk: string | Buffer): boolean {
-    this.writes.push(
-      typeof chunk === 'string' ? chunk : chunk.toString('utf8'),
-    );
-    return true;
-  }
-}
-
-function parseLast(stream: CapturingStream): Record<string, unknown> {
-  const last = stream.writes.at(-1);
-  if (last === undefined) {
-    throw new Error('no writes captured');
-  }
-  return JSON.parse(last) as Record<string, unknown>;
-}
+import {
+  createLogger,
+  createTestLogger,
+  silentLogger,
+} from '../src/logging.js';
 
 describe('createLogger', () => {
-  it('writes one JSON line per call with level, event, and timestamp', () => {
-    const stream = new CapturingStream();
-    const log = createLogger({ level: 'info', stream });
+  it('returns a usable pino logger at the configured level', () => {
+    const logger = createLogger({ level: 'info', name: 'homebot' });
+    expect(typeof logger.info).toBe('function');
+    expect(logger.level).toBe('info');
+  });
+});
 
-    log.info('startup');
+describe('silentLogger', () => {
+  it('accepts every method without throwing', () => {
+    silentLogger.debug('debug');
+    silentLogger.info('info');
+    silentLogger.warn('warn');
+    silentLogger.error('error');
+  });
+});
 
-    expect(stream.writes).toHaveLength(1);
-    const line = stream.writes[0];
-    expect(line?.endsWith('\n')).toBe(true);
+describe('createTestLogger', () => {
+  it('captures a log entry with message and structured fields', () => {
+    const { logger, entries } = createTestLogger();
 
-    const parsed = parseLast(stream);
-    expect(parsed.level).toBe('info');
-    expect(parsed.event).toBe('startup');
-    expect(typeof parsed.timestamp).toBe('string');
-    expect(() =>
-      new Date(parsed.timestamp as string).toISOString(),
-    ).not.toThrow();
+    logger.info({ telegramUserId: 42 }, 'request_submitted');
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.msg).toBe('request_submitted');
+    expect(entries[0]?.telegramUserId).toBe(42);
   });
 
-  it('merges supplied fields into the logged entry', () => {
-    const stream = new CapturingStream();
-    const log = createLogger({ level: 'info', stream });
+  it('records pino level codes (debug=20, info=30, warn=40, error=50)', () => {
+    const { logger, entries } = createTestLogger();
 
-    log.info('request_submitted', { title: 'Fight Club', tmdbId: 550 });
+    logger.debug('a');
+    logger.info('b');
+    logger.warn('c');
+    logger.error('d');
 
-    const parsed = parseLast(stream);
-    expect(parsed.tmdbId).toBe(550);
-    expect(parsed.title).toBe('Fight Club');
-    expect(parsed.event).toBe('request_submitted');
+    expect(entries.map(e => e.level)).toEqual([20, 30, 40, 50]);
   });
 
-  it('suppresses calls below the configured level', () => {
-    const stream = new CapturingStream();
-    const log = createLogger({ level: 'warn', stream });
+  it('isolates entries between instances', () => {
+    const a = createTestLogger();
+    const b = createTestLogger();
 
-    log.debug('ignored');
-    log.info('ignored');
-    log.warn('kept');
-    log.error('kept');
+    a.logger.info('from-a');
+    b.logger.info('from-b');
 
-    expect(stream.writes).toHaveLength(2);
-    expect(parseLast(stream).level).toBe('error');
+    expect(a.entries).toHaveLength(1);
+    expect(b.entries).toHaveLength(1);
+    expect(a.entries[0]?.msg).toBe('from-a');
+    expect(b.entries[0]?.msg).toBe('from-b');
   });
 
-  it('does not let supplied fields overwrite level, event, or timestamp', () => {
-    const stream = new CapturingStream();
-    const log = createLogger({ level: 'info', stream });
+  it('child bindings merge into captured entries', () => {
+    const { logger, entries } = createTestLogger();
+    const child = logger.child({ telegramUserId: 99 });
 
-    log.info('real_event', {
-      event: 'hacked',
-      level: 'debug',
-      timestamp: 'pwned',
-    });
+    child.info({ toolName: 'search_media' }, 'tool_call');
 
-    const parsed = parseLast(stream);
-    expect(parsed.event).toBe('real_event');
-    expect(parsed.level).toBe('info');
-    expect(parsed.timestamp).not.toBe('pwned');
+    expect(entries[0]?.telegramUserId).toBe(99);
+    expect(entries[0]?.toolName).toBe('search_media');
+    expect(entries[0]?.msg).toBe('tool_call');
   });
 });
