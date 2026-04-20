@@ -261,17 +261,27 @@ export function createToolDispatcher(
   ): Promise<ToolDispatchResult> {
     const args = parseSearchMediaArgs(call.arguments);
     if (args === null) {
-      return invalidArguments(
+      const failure = invalidArguments(
         'search_media',
         'search_media requires { query: string, mediaType?: "movie" | "tv" }.',
       );
+      logToolError('search_media', ctx.telegramUserId, failure);
+      return failure;
     }
 
     const signal = ctx.signal;
-    const raw = await options.overseerr.search(
-      args.query,
-      signal ? { signal } : undefined,
-    );
+    let raw: SearchCandidate[];
+    try {
+      raw = await options.overseerr.search(
+        args.query,
+        signal ? { signal } : undefined,
+      );
+    } catch (error) {
+      const failure = overseerrFailure('search_media', error);
+      logToolError('search_media', ctx.telegramUserId, failure);
+      return failure;
+    }
+
     const filtered =
       args.mediaType === undefined
         ? raw
@@ -326,10 +336,12 @@ export function createToolDispatcher(
   ): Promise<ToolDispatchResult> {
     const args = parseTmdbIdArgs(call.arguments);
     if (args === null) {
-      return invalidArguments(
+      const failure = invalidArguments(
         'request_media',
         'request_media requires { tmdbId: positive integer, mediaType: "movie" | "tv" }.',
       );
+      logToolError('request_media', ctx.telegramUserId, failure);
+      return failure;
     }
 
     const signal = ctx.signal;
@@ -433,10 +445,12 @@ export function createToolDispatcher(
   ): Promise<ToolDispatchResult> {
     const args = parseTmdbIdArgs(call.arguments);
     if (args === null) {
-      return invalidArguments(
+      const failure = invalidArguments(
         'get_media_details',
         'get_media_details requires { tmdbId: positive integer, mediaType: "movie" | "tv" }.',
       );
+      logToolError('get_media_details', ctx.telegramUserId, failure);
+      return failure;
     }
 
     const signal = ctx.signal;
@@ -470,8 +484,20 @@ export function createToolDispatcher(
           return handleGetMediaDetails(call, ctx);
         case 'request_media':
           return handleRequestMedia(call, ctx);
-        default:
-          return Promise.resolve(unknownTool(call.name));
+        default: {
+          // Log with the offending tool name (not the dispatcher's sentinel
+          // 'unknown') so logs point at what the LLM actually tried to call.
+          const failure = unknownTool(call.name);
+          options.logger.warn(
+            {
+              err: failure.message,
+              telegramUserId: ctx.telegramUserId,
+              toolName: call.name,
+            },
+            'tool_error',
+          );
+          return Promise.resolve(failure);
+        }
       }
     },
     tools: TOOLS,

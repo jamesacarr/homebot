@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createToolDispatcher } from '../../src/llm/tools.js';
-import { silentLogger } from '../../src/logging.js';
+import { createTestLogger, silentLogger } from '../../src/logging.js';
 import type {
   MediaDetails,
   SearchCandidate,
@@ -157,6 +157,71 @@ describe('createToolDispatcher — search_media', () => {
     }
     expect(result.output.candidates).toEqual([]);
   });
+
+  it('returns an isError=timeout result when Overseerr times out on search', async () => {
+    const overseerr = createFakeOverseerr({
+      onSearch: () => Promise.reject(new OverseerrTimeoutError()),
+    });
+    const dispatcher = createToolDispatcher({
+      logger: silentLogger,
+      overseerr,
+    });
+
+    const result = await dispatcher.dispatch(
+      toolCall('search_media', { query: 'Batman' }),
+      { telegramUserId: 1 },
+    );
+
+    if (!result.isError) {
+      throw new Error('expected error result');
+    }
+    expect(result.code).toBe('timeout');
+    expect(result.name).toBe('search_media');
+  });
+
+  it('returns an isError=error result when Overseerr returns a generic failure', async () => {
+    const overseerr = createFakeOverseerr({
+      onSearch: () =>
+        Promise.reject(new OverseerrError('Overseerr returned 500', 500)),
+    });
+    const dispatcher = createToolDispatcher({
+      logger: silentLogger,
+      overseerr,
+    });
+
+    const result = await dispatcher.dispatch(
+      toolCall('search_media', { query: 'Batman' }),
+      { telegramUserId: 1 },
+    );
+
+    if (!result.isError) {
+      throw new Error('expected error result');
+    }
+    expect(result.code).toBe('error');
+    expect(result.name).toBe('search_media');
+  });
+
+  it('rejects calls with an empty query as invalid_arguments and logs tool_error', async () => {
+    const overseerr = createFakeOverseerr();
+    const { entries, logger } = createTestLogger();
+    const dispatcher = createToolDispatcher({ logger, overseerr });
+
+    const result = await dispatcher.dispatch(
+      toolCall('search_media', { query: '   ' }),
+      { telegramUserId: 1 },
+    );
+
+    if (!result.isError) {
+      throw new Error('expected error result');
+    }
+    expect(result.code).toBe('invalid_arguments');
+    expect(overseerr.searchCalls).toEqual([]);
+    expect(
+      entries.some(
+        e => e.msg === 'tool_error' && e.toolName === 'search_media',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('createToolDispatcher — get_media_details', () => {
@@ -253,12 +318,10 @@ describe('createToolDispatcher — get_media_details', () => {
     expect(result.name).toBe('get_media_details');
   });
 
-  it('rejects calls missing tmdbId with invalid_arguments', async () => {
+  it('rejects calls missing tmdbId with invalid_arguments and logs tool_error', async () => {
     const overseerr = createFakeOverseerr();
-    const dispatcher = createToolDispatcher({
-      logger: silentLogger,
-      overseerr,
-    });
+    const { entries, logger } = createTestLogger();
+    const dispatcher = createToolDispatcher({ logger, overseerr });
 
     const result = await dispatcher.dispatch(
       toolCall('get_media_details', { mediaType: 'movie' }),
@@ -270,6 +333,11 @@ describe('createToolDispatcher — get_media_details', () => {
     }
     expect(result.code).toBe('invalid_arguments');
     expect(overseerr.detailsCalls).toEqual([]);
+    expect(
+      entries.some(
+        e => e.msg === 'tool_error' && e.toolName === 'get_media_details',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -459,12 +527,10 @@ describe('createToolDispatcher — request_media', () => {
     expect(overseerr.createCalls).toEqual([]);
   });
 
-  it('rejects calls with non-positive tmdbId as invalid_arguments', async () => {
+  it('rejects calls with non-positive tmdbId as invalid_arguments and logs tool_error', async () => {
     const overseerr = createFakeOverseerr();
-    const dispatcher = createToolDispatcher({
-      logger: silentLogger,
-      overseerr,
-    });
+    const { entries, logger } = createTestLogger();
+    const dispatcher = createToolDispatcher({ logger, overseerr });
 
     const result = await dispatcher.dispatch(
       toolCall('request_media', { mediaType: 'movie', tmdbId: -1 }),
@@ -477,6 +543,11 @@ describe('createToolDispatcher — request_media', () => {
     expect(result.code).toBe('invalid_arguments');
     expect(overseerr.detailsCalls).toEqual([]);
     expect(overseerr.createCalls).toEqual([]);
+    expect(
+      entries.some(
+        e => e.msg === 'tool_error' && e.toolName === 'request_media',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -495,12 +566,10 @@ describe('createToolDispatcher — tool registry', () => {
     ]);
   });
 
-  it('rejects unknown tool names with code=unknown_tool', async () => {
+  it('rejects unknown tool names with code=unknown_tool and logs tool_error', async () => {
     const overseerr = createFakeOverseerr();
-    const dispatcher = createToolDispatcher({
-      logger: silentLogger,
-      overseerr,
-    });
+    const { entries, logger } = createTestLogger();
+    const dispatcher = createToolDispatcher({ logger, overseerr });
 
     const result = await dispatcher.dispatch(
       toolCall('do_something_bad', { x: 1 }),
@@ -512,6 +581,11 @@ describe('createToolDispatcher — tool registry', () => {
     }
     expect(result.code).toBe('unknown_tool');
     expect(result.name).toBe('unknown');
+    expect(
+      entries.some(
+        e => e.msg === 'tool_error' && e.toolName === 'do_something_bad',
+      ),
+    ).toBe(true);
   });
 });
 
