@@ -164,6 +164,16 @@ the message. Both must pass before the commit lands.
 - Production image expects `/data` to be a mounted volume containing the
   SQLite file.
 
+## Known quirks
+
+- **lint-staged + husky can pull unstaged changes into a commit.** If your
+  working tree has modifications beyond what you staged, the pre-commit hook's
+  stash/restore dance sometimes ends with those extra files in the commit
+  anyway. Mitigation: stage exactly the files you want in the commit, or
+  `--no-verify` when you're certain the hook is misbehaving. Verify the
+  commit's file list (`git show --stat HEAD`) after every commit until this
+  is root-caused.
+
 ## When in doubt
 
 - Read `plan.md` end-to-end. It captures the *why* for most decisions.
