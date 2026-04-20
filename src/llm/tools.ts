@@ -43,26 +43,30 @@ export interface RequestMediaOutput {
   message: string;
 }
 
-export interface ToolOutputMap {
-  search_media: SearchMediaOutput;
-  get_media_details: GetMediaDetailsOutput;
-  request_media: RequestMediaOutput;
-}
-
 /**
- * Distributed over `ToolName` so `name` acts as a proper discriminant:
- * narrowing with `result.name === 'search_media'` reveals
- * `output: SearchMediaOutput` to callers.
+ * `name` is the discriminant: narrowing with `result.name === 'search_media'`
+ * reveals `output: SearchMediaOutput` to callers.
  */
-export type ToolDispatchSuccess = {
-  [N in ToolName]: {
-    isError: false;
-    name: N;
-    output: ToolOutputMap[N];
-    /** JSON-serialised representation of `output`, forwarded to the LLM as text. */
-    text: string;
-  };
-}[ToolName];
+export type ToolDispatchSuccess =
+  | {
+      isError: false;
+      name: 'search_media';
+      output: SearchMediaOutput;
+      /** JSON-serialised representation of `output`, forwarded to the LLM as text. */
+      text: string;
+    }
+  | {
+      isError: false;
+      name: 'get_media_details';
+      output: GetMediaDetailsOutput;
+      text: string;
+    }
+  | {
+      isError: false;
+      name: 'request_media';
+      output: RequestMediaOutput;
+      text: string;
+    };
 
 /** Terse error codes the LLM has been prompted to recognise. */
 export type ToolErrorCode =
@@ -236,18 +240,33 @@ function unknownTool(name: string): ToolDispatchFailure {
   };
 }
 
-function success<N extends ToolName>(
-  name: N,
-  output: ToolOutputMap[N],
-): ToolDispatchSuccess {
-  // The cast is safe: `name` and `output` are constrained by the generic to
-  // match one branch of the distributed union, but TS can't prove it.
+function searchMediaSuccess(output: SearchMediaOutput): ToolDispatchSuccess {
   return {
     isError: false,
-    name,
+    name: 'search_media',
     output,
     text: JSON.stringify(output),
-  } as ToolDispatchSuccess;
+  };
+}
+
+function getMediaDetailsSuccess(
+  output: GetMediaDetailsOutput,
+): ToolDispatchSuccess {
+  return {
+    isError: false,
+    name: 'get_media_details',
+    output,
+    text: JSON.stringify(output),
+  };
+}
+
+function requestMediaSuccess(output: RequestMediaOutput): ToolDispatchSuccess {
+  return {
+    isError: false,
+    name: 'request_media',
+    output,
+    text: JSON.stringify(output),
+  };
 }
 
 export function createToolDispatcher(
@@ -299,7 +318,7 @@ export function createToolDispatcher(
       'tool_call',
     );
 
-    return success('search_media', { candidates });
+    return searchMediaSuccess({ candidates });
   }
 
   function logToolError(
@@ -379,8 +398,7 @@ export function createToolDispatcher(
         duplicateStatus === 'already_available'
           ? `${details.title} is already available on the server.`
           : `${details.title} has already been requested.`;
-      return success(
-        'request_media',
+      return requestMediaSuccess(
         buildRequestMediaOutput(args, details, duplicateStatus, message),
       );
     }
@@ -404,8 +422,7 @@ export function createToolDispatcher(
           },
           'request_duplicate',
         );
-        return success(
-          'request_media',
+        return requestMediaSuccess(
           buildRequestMediaOutput(
             args,
             details,
@@ -428,8 +445,7 @@ export function createToolDispatcher(
       },
       'request_submitted',
     );
-    return success(
-      'request_media',
+    return requestMediaSuccess(
       buildRequestMediaOutput(
         args,
         details,
@@ -467,7 +483,7 @@ export function createToolDispatcher(
         },
         'tool_call',
       );
-      return success('get_media_details', { details });
+      return getMediaDetailsSuccess({ details });
     } catch (error) {
       const failure = overseerrFailure('get_media_details', error);
       logToolError('get_media_details', ctx.telegramUserId, failure);

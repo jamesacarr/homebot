@@ -261,16 +261,32 @@ export function createOrchestrator(deps: CreateOrchestratorDeps): Orchestrator {
 
     let costDeltaUsd = 0;
     let finalAssistantMessage: AssistantMessage | null = null;
-    let capHit = false;
 
-    for (let round = 0; round <= maxToolRounds; round++) {
+    // Shared shortcut for every early-return path so the orchestrator
+    // consistently returns `{ replies, turnToPersist, costDeltaUsd }`
+    // regardless of which branch bails.
+    const apologise = (text: string): OrchestratorOutput => ({
+      costDeltaUsd,
+      replies: [{ kind: 'text', text }],
+      turnToPersist: newMessages,
+    });
+
+    // `toolRound` counts how many tool-dispatch rounds have been consumed.
+    // The loop alternates LLM call → maybe dispatch tools. The master cap is
+    // enforced adjacent to its check: when an assistant message arrives with
+    // more tool calls and we've already used `maxToolRounds`, we stop.
+    let toolRound = 0;
+    for (;;) {
       const context: Context = {
         messages: contextMessages,
         systemPrompt: deps.systemPrompt,
         tools: dispatcher.tools,
       };
 
-      turnLog.info({ model: deps.llmModel.id, turnIndex: round }, 'llm_call');
+      turnLog.info(
+        { model: deps.llmModel.id, turnIndex: toolRound },
+        'llm_call',
+      );
 
       let assistant: AssistantMessage;
       try {
@@ -280,70 +296,40 @@ export function createOrchestrator(deps: CreateOrchestratorDeps): Orchestrator {
         });
       } catch (error) {
         turnLog.error({ err: error }, 'llm_call_failed');
-        return {
-          costDeltaUsd,
-          replies: [
-            {
-              kind: 'text',
-              text: 'Something went wrong talking to the model — try again in a moment?',
-            },
-          ],
-          turnToPersist: newMessages,
-        };
+        return apologise(
+          'Something went wrong talking to the model — try again in a moment?',
+        );
       }
 
       // Don't trust `usage.cost.total` from the provider — some providers
       // (and the faux provider in tests) leave it zero. Recompute from the
       // model's per-token rates so the cost cap sees a real number.
-      const computed = calculateCost(deps.llmModel, assistant.usage);
-      costDeltaUsd += computed.total;
+      costDeltaUsd += calculateCost(deps.llmModel, assistant.usage).total;
       contextMessages.push(assistant);
       newMessages.push(assistant);
       finalAssistantMessage = assistant;
 
       if (assistant.stopReason === 'aborted') {
         turnLog.warn({ reason: assistant.stopReason }, 'llm_call_failed');
-        return {
-          costDeltaUsd,
-          replies: [
-            {
-              kind: 'text',
-              text: 'That took too long — try again in a moment.',
-            },
-          ],
-          turnToPersist: newMessages,
-        };
+        return apologise('That took too long — try again in a moment.');
       }
       if (assistant.stopReason === 'error') {
         turnLog.error(
           { err: assistant.errorMessage, reason: assistant.stopReason },
           'llm_call_failed',
         );
-        return {
-          costDeltaUsd,
-          replies: [
-            {
-              kind: 'text',
-              text: 'Something went wrong talking to the model — try again in a moment?',
-            },
-          ],
-          turnToPersist: newMessages,
-        };
+        return apologise(
+          'Something went wrong talking to the model — try again in a moment?',
+        );
       }
 
       const toolCalls = extractToolCalls(assistant);
       if (toolCalls.length === 0) {
         break;
       }
-
-      // Enforce the safety cap BEFORE executing the next batch of tools:
-      // round starts at 0 and increments per LLM call, so `round` equals the
-      // number of assistant messages received so far once we're here. If we've
-      // already issued maxToolRounds calls and the model is still asking for
-      // more, stop.
-      if (round >= maxToolRounds) {
-        capHit = true;
-        break;
+      if (toolRound >= maxToolRounds) {
+        turnLog.warn({ rounds: maxToolRounds }, 'llm_tool_round_cap_hit');
+        return apologise('I got stuck thinking — try rephrasing?');
       }
 
       for (const call of toolCalls) {
@@ -360,20 +346,7 @@ export function createOrchestrator(deps: CreateOrchestratorDeps): Orchestrator {
         contextMessages.push(toolResultMessage);
         newMessages.push(toolResultMessage);
       }
-    }
-
-    if (capHit) {
-      turnLog.warn({ rounds: maxToolRounds }, 'llm_tool_round_cap_hit');
-      return {
-        costDeltaUsd,
-        replies: [
-          {
-            kind: 'text',
-            text: 'I got stuck thinking — try rephrasing?',
-          },
-        ],
-        turnToPersist: newMessages,
-      };
+      toolRound++;
     }
 
     const assistantText =
