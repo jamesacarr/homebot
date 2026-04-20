@@ -3,6 +3,19 @@ import { sql } from 'kysely';
 import type { AppDb } from './index.js';
 
 /**
+ * Format a millisecond timestamp as the UTC-day key used by `daily_cost`.
+ * Always returns `YYYY-MM-DD`. Centralised here so any future change to the
+ * day-bucket convention only updates one place.
+ */
+export function utcDayKey(nowMs: number): string {
+  const d = new Date(nowMs);
+  const yyyy = d.getUTCFullYear().toString().padStart(4, '0');
+  const mm = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+  const dd = d.getUTCDate().toString().padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
  * Returns the cumulative USD spend for the given UTC day (format YYYY-MM-DD).
  * Days with no recorded spend return 0.
  */
