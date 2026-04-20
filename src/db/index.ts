@@ -8,10 +8,12 @@ import type { Database } from './types.js';
 export type AppDb = Kysely<Database>;
 
 export function createDb(path: string): AppDb {
+  const sqlite = new BetterSqlite3(path);
+  // SQLite disables FK enforcement by default. Enable it so any future
+  // foreign-key declaration in a migration is actually honoured.
+  sqlite.pragma('foreign_keys = ON');
   return new Kysely<Database>({
-    dialect: new SqliteDialect({
-      database: new BetterSqlite3(path),
-    }),
+    dialect: new SqliteDialect({ database: sqlite }),
     plugins: [new CamelCasePlugin()],
   });
 }

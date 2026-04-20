@@ -24,6 +24,9 @@ export async function addCost(
   dayUtc: string,
   deltaUsd: number,
 ): Promise<void> {
+  // Note: the raw SQL below references `cost_usd` in snake_case because it
+  // bypasses the CamelCasePlugin. If the column is ever renamed via a
+  // migration, update this reference too — kysely's builder won't catch it.
   await db
     .insertInto('dailyCost')
     .values({ costUsd: deltaUsd, dayUtc })

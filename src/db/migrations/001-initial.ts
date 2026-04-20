@@ -10,6 +10,9 @@ export async function up(db: Kysely<any>): Promise<void> {
     .addColumn('status', 'text', c =>
       c
         .notNull()
+        // Raw SQL: the `status` column name is single-word so snake_case and
+        // camelCase coincide here. If the column is ever renamed, update this
+        // reference manually — kysely's builder won't track it.
         .check(sql`status IN ('pending', 'approved', 'denied', 'revoked')`),
     )
     .addColumn('requestedAt', 'integer', c => c.notNull())

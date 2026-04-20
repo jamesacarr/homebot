@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from '../src/config.js';
+import { ConfigError, loadConfig } from '../src/config.js';
 
 const completeEnv = {
   ANTHROPIC_API_KEY: 'sk-ant-test',
@@ -43,6 +43,48 @@ describe('loadConfig', () => {
     for (const name of requiredVars) {
       expect(() => loadConfig({})).toThrow(name);
     }
+  });
+
+  it('reports missing required fields as "Required", not as a coercion artefact', () => {
+    let caught: unknown;
+    try {
+      loadConfig({});
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ConfigError);
+    const issues = (caught as ConfigError).issues;
+    expect(
+      issues.find(i => i.envVar === 'OWNER_TELEGRAM_USER_ID')?.message,
+    ).toBe('Required');
+    expect(issues.find(i => i.envVar === 'TELEGRAM_BOT_TOKEN')?.message).toBe(
+      'Required',
+    );
+  });
+
+  it('treats an empty string as missing, not as a malformed value', () => {
+    expect(() =>
+      loadConfig({ ...completeEnv, TELEGRAM_BOT_TOKEN: '' }),
+    ).toThrow(/TELEGRAM_BOT_TOKEN.*Required/s);
+  });
+
+  it('exposes issues as a structured list on the thrown ConfigError', () => {
+    let caught: unknown;
+    try {
+      loadConfig({});
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ConfigError);
+    const issues = (caught as ConfigError).issues;
+    expect(Array.isArray(issues)).toBe(true);
+    expect(
+      issues.every(
+        i => typeof i.envVar === 'string' && typeof i.message === 'string',
+      ),
+    ).toBe(true);
   });
 
   it('applies supplied values for optional fields', () => {
