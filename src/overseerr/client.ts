@@ -51,10 +51,17 @@ export interface CreateRequestInput {
   is4k?: boolean;
 }
 
+export interface CallOptions {
+  signal?: AbortSignal;
+}
+
 export interface OverseerrClient {
-  getStatus(): Promise<OverseerrStatus>;
-  search(query: string): Promise<SearchCandidate[]>;
-  createRequest(input: CreateRequestInput): Promise<void>;
+  getStatus(options?: CallOptions): Promise<OverseerrStatus>;
+  search(query: string, options?: CallOptions): Promise<SearchCandidate[]>;
+  createRequest(
+    input: CreateRequestInput,
+    options?: CallOptions,
+  ): Promise<void>;
 }
 
 export interface CreateOverseerrClientOptions {
@@ -64,29 +71,11 @@ export interface CreateOverseerrClientOptions {
   timeoutMs?: number;
 }
 
-interface RawSearchResultBase {
-  id?: unknown;
-  mediaType?: unknown;
-  popularity?: unknown;
-  posterPath?: unknown;
-  overview?: unknown;
-  mediaInfo?: { status?: unknown } | null;
-}
-
-interface RawMovieResult extends RawSearchResultBase {
-  title?: unknown;
-  releaseDate?: unknown;
-}
-
-interface RawTvResult extends RawSearchResultBase {
-  name?: unknown;
-  firstAirDate?: unknown;
-}
-
-type RawSearchResult = RawMovieResult & RawTvResult & { mediaType?: unknown };
-
-interface RawSearchResponse {
-  results?: unknown;
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 function extractYear(date: unknown): string | null {
@@ -96,46 +85,106 @@ function extractYear(date: unknown): string | null {
   return date.slice(0, 4);
 }
 
-function mapStatus(raw: RawSearchResult): MediaStatus | null {
-  const code = raw.mediaInfo?.status;
+function mapStatus(mediaInfo: unknown): MediaStatus | null {
+  const info = asRecord(mediaInfo);
+  const code = info?.status;
   if (typeof code !== 'number') {
     return null;
   }
   return MEDIA_STATUS_BY_CODE[code] ?? null;
 }
 
-function toCandidate(raw: RawSearchResult): SearchCandidate | null {
-  if (raw.mediaType !== 'movie' && raw.mediaType !== 'tv') {
-    return null;
-  }
-  if (typeof raw.id !== 'number') {
+function toCandidate(raw: unknown): SearchCandidate | null {
+  const r = asRecord(raw);
+  if (r === null) {
     return null;
   }
 
-  const isMovie = raw.mediaType === 'movie';
-  const title = isMovie ? raw.title : raw.name;
+  const mediaType = r.mediaType;
+  if (mediaType !== 'movie' && mediaType !== 'tv') {
+    return null;
+  }
+
+  const tmdbId = r.id;
+  if (typeof tmdbId !== 'number') {
+    return null;
+  }
+
+  const title = mediaType === 'movie' ? r.title : r.name;
   if (typeof title !== 'string') {
     return null;
   }
 
+  const dateField = mediaType === 'movie' ? r.releaseDate : r.firstAirDate;
+
   return {
-    mediaType: raw.mediaType,
-    overview: typeof raw.overview === 'string' ? raw.overview : null,
-    popularity: typeof raw.popularity === 'number' ? raw.popularity : 0,
+    mediaType,
+    overview: typeof r.overview === 'string' ? r.overview : null,
+    popularity: typeof r.popularity === 'number' ? r.popularity : 0,
     posterUrl:
-      typeof raw.posterPath === 'string'
-        ? `${TMDB_IMAGE_BASE}${raw.posterPath}`
+      typeof r.posterPath === 'string'
+        ? `${TMDB_IMAGE_BASE}${r.posterPath}`
         : null,
-    status: mapStatus(raw),
+    status: mapStatus(r.mediaInfo),
     title,
-    tmdbId: raw.id,
-    year: extractYear(isMovie ? raw.releaseDate : raw.firstAirDate),
+    tmdbId,
+    year: extractYear(dateField),
   };
+}
+
+interface ErrorMeta {
+  errorCode?: number;
+  message?: string;
+}
+
+function extractErrorMeta(body: unknown): ErrorMeta {
+  const r = asRecord(body);
+  if (r === null) {
+    return {};
+  }
+  const result: ErrorMeta = {};
+  if (typeof r.errorCode === 'number') {
+    result.errorCode = r.errorCode;
+  }
+  if (typeof r.message === 'string') {
+    result.message = r.message;
+  }
+  return result;
+}
+
+async function readErrorBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function buildErrorFromResponse(
+  response: Response,
+  path: string,
+): Promise<OverseerrError> {
+  const body = await readErrorBody(response);
+  const meta = extractErrorMeta(body);
+  const baseMessage = `Overseerr returned ${response.status} for ${path}`;
+  const message = meta.message
+    ? `${baseMessage}: ${meta.message}`
+    : baseMessage;
+
+  switch (response.status) {
+    case 401:
+      return new OverseerrUnauthorizedError(message, meta.errorCode, body);
+    case 404:
+      return new OverseerrNotFoundError(message, meta.errorCode, body);
+    default:
+      return new OverseerrError(message, response.status, meta.errorCode, body);
+  }
 }
 
 interface RequestOptions {
   method?: 'GET' | 'POST';
   body?: unknown;
+  signal?: AbortSignal;
 }
 
 export function createOverseerrClient(
@@ -151,50 +200,49 @@ export function createOverseerrClient(
   ): Promise<unknown> => {
     const method = reqOptions.method ?? 'GET';
     const headers: Record<string, string> = { 'X-Api-Key': options.apiKey };
-    let body: string | undefined;
+    let bodyString: string | undefined;
     if (reqOptions.body !== undefined) {
       headers['Content-Type'] = 'application/json';
-      body = JSON.stringify(reqOptions.body);
+      bodyString = JSON.stringify(reqOptions.body);
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const init: RequestInit = { headers, method, signal: controller.signal };
-    if (body !== undefined) {
-      init.body = body;
+    const internalSignal = AbortSignal.timeout(timeoutMs);
+    const combinedSignal = reqOptions.signal
+      ? AbortSignal.any([internalSignal, reqOptions.signal])
+      : internalSignal;
+
+    const init: RequestInit = { headers, method, signal: combinedSignal };
+    if (bodyString !== undefined) {
+      init.body = bodyString;
     }
+
     let response: Response;
     try {
       response = await fetchFn(`${base}/api/v1${path}`, init);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (
+        error instanceof Error &&
+        (error.name === 'AbortError' || error.name === 'TimeoutError')
+      ) {
+        // External signal wins if both are aborted: respect the caller's intent.
+        if (reqOptions.signal?.aborted) {
+          throw reqOptions.signal.reason ?? error;
+        }
         throw new OverseerrTimeoutError(
           `Overseerr request to ${path} exceeded ${timeoutMs}ms`,
         );
       }
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
 
-    if (response.status === 401) {
-      throw new OverseerrUnauthorizedError();
-    }
-    if (response.status === 404) {
-      throw new OverseerrNotFoundError();
-    }
     if (!response.ok) {
-      throw new OverseerrError(
-        `Overseerr returned ${response.status} for ${path}`,
-        response.status,
-      );
+      throw await buildErrorFromResponse(response, path);
     }
-
     return response.json();
   };
 
   return {
-    async createRequest(input: CreateRequestInput): Promise<void> {
+    async createRequest(input, callOptions) {
       // Default TV requests to the full series per plan.md.
       const body: Record<string, unknown> = {
         mediaId: input.tmdbId,
@@ -206,26 +254,33 @@ export function createOverseerrClient(
       if (input.is4k === true) {
         body.is4k = true;
       }
-      await request('/request', { body, method: 'POST' });
+      await request('/request', {
+        body,
+        method: 'POST',
+        ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
+      });
     },
-    async getStatus(): Promise<OverseerrStatus> {
-      const data = (await request('/status')) as { version?: unknown };
+
+    async getStatus(callOptions) {
+      const data = (await request('/status', {
+        ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
+      })) as { version?: unknown };
       if (typeof data.version !== 'string') {
         throw new OverseerrError('Overseerr status response missing version');
       }
       return { version: data.version };
     },
 
-    async search(query: string): Promise<SearchCandidate[]> {
+    async search(query, callOptions) {
       const params = new URLSearchParams({ query });
-      const data = (await request(
-        `/search?${params.toString()}`,
-      )) as RawSearchResponse;
+      const data = (await request(`/search?${params.toString()}`, {
+        ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
+      })) as { results?: unknown };
       if (!Array.isArray(data.results)) {
         return [];
       }
       const candidates: SearchCandidate[] = [];
-      for (const raw of data.results as RawSearchResult[]) {
+      for (const raw of data.results) {
         const candidate = toCandidate(raw);
         if (candidate !== null) {
           candidates.push(candidate);

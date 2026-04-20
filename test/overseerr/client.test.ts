@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { createOverseerrClient } from '../../src/overseerr/client.js';
-import { OverseerrTimeoutError } from '../../src/overseerr/errors.js';
+import {
+  OverseerrError,
+  OverseerrNotFoundError,
+  OverseerrTimeoutError,
+  OverseerrUnauthorizedError,
+} from '../../src/overseerr/errors.js';
 
 interface CapturedCall {
   url: string;
@@ -71,6 +76,45 @@ describe('OverseerrClient.getStatus', () => {
     });
 
     await expect(client.getStatus()).rejects.toThrow(/500/);
+  });
+
+  it('throws OverseerrUnauthorizedError on a 401 response', async () => {
+    const { fetch } = makeFetchFake(() => new Response('', { status: 401 }));
+    const client = createOverseerrClient({
+      apiKey: 'bad',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    await expect(client.getStatus()).rejects.toBeInstanceOf(
+      OverseerrUnauthorizedError,
+    );
+  });
+
+  it('throws OverseerrNotFoundError on a 404 response', async () => {
+    const { fetch } = makeFetchFake(() => new Response('', { status: 404 }));
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    await expect(client.getStatus()).rejects.toBeInstanceOf(
+      OverseerrNotFoundError,
+    );
+  });
+
+  it('throws OverseerrError when the response lacks a version field', async () => {
+    const { fetch } = makeFetchFake(
+      () => new Response(JSON.stringify({ not: 'version' }), { status: 200 }),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    await expect(client.getStatus()).rejects.toThrow(/missing version/);
   });
 });
 
@@ -228,9 +272,40 @@ describe('OverseerrClient.createRequest', () => {
       client.createRequest({ mediaType: 'movie', tmdbId: 1 }),
     ).rejects.toThrow(/409/);
   });
+
+  it('surfaces errorCode and server message on the thrown OverseerrError', async () => {
+    const { fetch } = makeFetchFake(
+      () =>
+        new Response(
+          JSON.stringify({
+            errorCode: 40149,
+            message: 'Request already exists.',
+          }),
+          { status: 409 },
+        ),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    let caught: unknown;
+    try {
+      await client.createRequest({ mediaType: 'movie', tmdbId: 1 });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OverseerrError);
+    const err = caught as OverseerrError;
+    expect(err.status).toBe(409);
+    expect(err.errorCode).toBe(40149);
+    expect(err.message).toContain('Request already exists.');
+  });
 });
 
-describe('OverseerrClient request timeouts', () => {
+describe('OverseerrClient request timeouts and cancellation', () => {
   function makeHangingFetch(): typeof fetch {
     return (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
@@ -256,5 +331,19 @@ describe('OverseerrClient request timeouts', () => {
     await expect(client.getStatus()).rejects.toBeInstanceOf(
       OverseerrTimeoutError,
     );
+  });
+
+  it('propagates the caller-supplied abort reason when the external signal fires first', async () => {
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch: makeHangingFetch(),
+      timeoutMs: 10_000,
+    });
+
+    const reason = new Error('master timeout hit');
+    const external = AbortSignal.abort(reason);
+
+    await expect(client.getStatus({ signal: external })).rejects.toBe(reason);
   });
 });
