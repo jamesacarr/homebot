@@ -1,3 +1,5 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+
 import { describe, expect, it } from 'vitest';
 
 import { createUserLock } from '../src/concurrency.js';
@@ -48,9 +50,10 @@ describe('createUserLock', () => {
       events.push('b-end');
     });
 
-    // Yield so both start.
-    await Promise.resolve();
-    await Promise.resolve();
+    // Flush all pending microtasks. If the lock were serialising across
+    // different userIds, B would not have entered its critical section yet
+    // (A is still suspended on userA.promise).
+    await yieldToEventLoop();
 
     expect(events).toEqual(['a-start', 'b-start']);
 

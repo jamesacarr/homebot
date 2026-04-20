@@ -9,6 +9,11 @@ export interface UserLock {
  *
  * State is in-memory only — a process restart releases all locks, which is
  * acceptable for this use case (user just retries).
+ *
+ * Memory note: `tails` is never pruned. Every distinct userId that has ever
+ * acquired the lock keeps one Promise entry alive for the lifetime of the
+ * process. For a home bot with a small set of users this is negligible; a
+ * high-cardinality deployment would need periodic cleanup.
  */
 export function createUserLock(): UserLock {
   const tails = new Map<number, Promise<unknown>>();
