@@ -12,13 +12,10 @@ import type {
 } from '@mariozechner/pi-ai';
 import { calculateCost, completeSimple } from '@mariozechner/pi-ai';
 
+import { encodePickCallback } from '../callbacks.js';
 import type { ThinkingLevel } from '../config.js';
 import type { Logger } from '../logging.js';
-import type {
-  OverseerrClient,
-  OverseerrMediaType,
-  SearchCandidate,
-} from '../overseerr/client.js';
+import type { OverseerrClient, SearchCandidate } from '../overseerr/client.js';
 import type { ToolDispatcher, ToolDispatchResult } from './tools.js';
 import { createToolDispatcher } from './tools.js';
 
@@ -174,18 +171,11 @@ function buildPickerReplies(
     });
   });
   const buttons = pickables.map((c, index) => ({
-    data: encodePickCallback(c.tmdbId, c.mediaType),
+    data: encodePickCallback({ mediaType: c.mediaType, tmdbId: c.tmdbId }),
     label: String(index + 1),
   }));
   replies.push({ buttons, kind: 'keyboard', text: 'Pick one:' });
   return replies;
-}
-
-function encodePickCallback(
-  tmdbId: number,
-  mediaType: OverseerrMediaType,
-): string {
-  return `pick:${tmdbId}:${mediaType}`;
 }
 
 function buildFinalReplies(
