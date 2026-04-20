@@ -1,0 +1,212 @@
+import type { Context } from 'grammy';
+import { Bot } from 'grammy';
+
+import {
+  decodeCallbackData,
+  encodeRequestAccessCallback,
+} from '../callbacks.js';
+import { createUserLock } from '../concurrency.js';
+import { recordTurn } from '../db/conversations.js';
+import type { AppDb } from '../db/index.js';
+import type { Orchestrator } from '../llm/orchestrator.js';
+import type { ToolDispatcher } from '../llm/tools.js';
+import type { Logger } from '../logging.js';
+import type { OverseerrClient } from '../overseerr/client.js';
+import {
+  handleAccessDecision,
+  handleAccessRequest,
+} from './access-callbacks.js';
+import { asTelegramOutboundApi } from './adapter.js';
+import { renderReplies } from './render.js';
+import { runTextTurn } from './run-text-turn.js';
+import { handleSelection } from './selection.js';
+
+export interface CreateBotDeps {
+  token: string;
+  db: AppDb;
+  orchestrate: Orchestrator;
+  toolDispatcher: ToolDispatcher;
+  /** Currently unused at the bot layer but plumbed for future use. */
+  overseerr: OverseerrClient;
+  logger: Logger;
+  ownerTelegramUserId: number;
+  capUsd: number;
+  maxTurnsInHistory: number;
+  /** Test seam: defaults to `Date.now`. */
+  now?: () => number;
+}
+
+export function createBot(deps: CreateBotDeps): Bot {
+  const bot = new Bot(deps.token);
+  const log = deps.logger.child({ module: 'telegram' });
+  const now = deps.now ?? ((): number => Date.now());
+  // One lock instance per bot. Per-user mutex serialises that user's
+  // messages and callbacks against each other; different users run in
+  // parallel.
+  const userLock = createUserLock();
+
+  // Middleware: 1:1 DMs only. Belt-and-braces against group chats even if
+  // BotFather privacy mode is on. We answer once, leave, and stop processing.
+  bot.use(async (ctx: Context, next: () => Promise<void>) => {
+    if (ctx.chat && ctx.chat.type !== 'private') {
+      log.info(
+        { chatId: ctx.chat.id, chatType: ctx.chat.type },
+        'group_chat_rejected',
+      );
+      await ctx.reply('I only work in direct messages.');
+      try {
+        await ctx.leaveChat();
+      } catch (error) {
+        log.warn({ err: error }, 'group_chat_rejected');
+      }
+      return;
+    }
+    await next();
+  });
+
+  bot.on('message:text', async ctx => {
+    const userId = ctx.from?.id;
+    const chatId = ctx.chat?.id;
+    if (userId === undefined || chatId === undefined) {
+      return;
+    }
+    const username = ctx.from?.username ?? null;
+    const text = ctx.message.text;
+
+    await userLock.acquire(userId, async () => {
+      const result = await runTextTurn({
+        capUsd: deps.capUsd,
+        db: deps.db,
+        incomingText: text,
+        logger: log,
+        maxTurnsInHistory: deps.maxTurnsInHistory,
+        now: now(),
+        orchestrate: deps.orchestrate,
+        ownerTelegramUserId: deps.ownerTelegramUserId,
+        telegramUserId: userId,
+        ...(username === null ? {} : { telegramUsername: username }),
+      });
+
+      if (result.kind === 'drop_silently') {
+        return;
+      }
+      if (result.kind === 'prompt_for_access') {
+        const replies = [
+          ...result.replies,
+          {
+            buttons: [
+              {
+                data: encodeRequestAccessCallback(),
+                label: 'Request access',
+              },
+            ],
+            kind: 'keyboard' as const,
+            text: 'Tap to send the request:',
+          },
+        ];
+        await renderReplies(asTelegramOutboundApi(ctx.api), chatId, replies);
+        return;
+      }
+      // kind === 'replies'
+      try {
+        await renderReplies(
+          asTelegramOutboundApi(ctx.api),
+          chatId,
+          result.replies,
+        );
+      } catch (error) {
+        log.error({ err: error, telegramUserId: userId }, 'render_failed');
+      }
+    });
+  });
+
+  bot.on('callback_query:data', async ctx => {
+    const fromId = ctx.from?.id;
+    const chatId = ctx.chat?.id;
+    if (fromId === undefined || chatId === undefined) {
+      return;
+    }
+    const decoded = decodeCallbackData(ctx.callbackQuery.data);
+    if (decoded === null) {
+      // Acknowledge so the spinner clears, but ignore the click.
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    // Always answer the callback query to clear the loading spinner.
+    await ctx.answerCallbackQuery();
+
+    const adapter = {
+      send: async (
+        toId: number,
+        replies: Parameters<typeof renderReplies>[2],
+      ) => {
+        await renderReplies(asTelegramOutboundApi(ctx.api), toId, replies);
+      },
+    };
+
+    if (decoded.kind === 'access_request') {
+      await handleAccessRequest({
+        adapter,
+        db: deps.db,
+        logger: log,
+        now: now(),
+        ownerTelegramUserId: deps.ownerTelegramUserId,
+        requesterTelegramUserId: fromId,
+        requesterUsername: ctx.from?.username ?? null,
+      });
+      return;
+    }
+
+    if (decoded.kind === 'approve' || decoded.kind === 'deny') {
+      await handleAccessDecision({
+        adapter,
+        db: deps.db,
+        decision: decoded.kind,
+        fromTelegramUserId: fromId,
+        logger: log,
+        now: now(),
+        ownerTelegramUserId: deps.ownerTelegramUserId,
+        requesterTelegramUserId: decoded.requesterId,
+      });
+      return;
+    }
+
+    if (decoded.kind === 'pick') {
+      await userLock.acquire(fromId, async () => {
+        const result = await handleSelection({
+          dispatcher: deps.toolDispatcher,
+          logger: log,
+          now: now(),
+          pick: { mediaType: decoded.mediaType, tmdbId: decoded.tmdbId },
+          telegramUserId: fromId,
+        });
+        try {
+          await renderReplies(
+            asTelegramOutboundApi(ctx.api),
+            chatId,
+            result.replies,
+          );
+        } catch (error) {
+          log.error({ err: error, telegramUserId: fromId }, 'render_failed');
+        }
+        // Persist the synthetic turn AFTER successful sends.
+        try {
+          await recordTurn(deps.db, {
+            maxTurns: deps.maxTurnsInHistory,
+            messages: result.turnToPersist,
+            now: now(),
+            telegramUserId: fromId,
+          });
+        } catch (error) {
+          log.error({ err: error, telegramUserId: fromId }, 'persist_failed');
+        }
+      });
+    }
+  });
+
+  bot.catch(err => {
+    log.error({ err: err.error }, 'unhandled_bot_error');
+  });
+
+  return bot;
+}
