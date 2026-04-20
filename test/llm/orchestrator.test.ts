@@ -580,7 +580,112 @@ describe('orchestrator — caps and error paths', () => {
     expect(result.replies[0].text).toMatch(/stuck/i);
   });
 
-  it('returns an apologetic reply when the master abort signal fires mid-call', async () => {
+  it('dispatches multiple tool calls in one assistant message in order and appends a toolResult per call', async () => {
+    const overseerr = createFakeOverseerr({
+      detailsByTmdbId: new Map([
+        [
+          414906,
+          {
+            cast: [],
+            createdBy: [],
+            directors: [],
+            genres: [],
+            mediaType: 'movie',
+            networks: [],
+            overview: '',
+            posterUrl: null,
+            releaseDate: '2022-03-01',
+            runtime: 176,
+            status: null,
+            title: 'The Batman',
+            tmdbId: 414906,
+            voteAverage: null,
+            year: '2022',
+          },
+        ],
+        [
+          272,
+          {
+            cast: [],
+            createdBy: [],
+            directors: [],
+            genres: [],
+            mediaType: 'movie',
+            networks: [],
+            overview: '',
+            posterUrl: null,
+            releaseDate: '2005-06-15',
+            runtime: 140,
+            status: null,
+            title: 'Batman Begins',
+            tmdbId: 272,
+            voteAverage: null,
+            year: '2005',
+          },
+        ],
+      ]),
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            'get_media_details',
+            { mediaType: 'movie', tmdbId: 414906 },
+            { id: 'parallel_a' },
+          ),
+          fauxToolCall(
+            'get_media_details',
+            { mediaType: 'movie', tmdbId: 272 },
+            { id: 'parallel_b' },
+          ),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('Looked at both.'),
+    ]);
+
+    const orchestrate = createOrchestrator({
+      llmModel: model,
+      logger: silentLogger,
+      overseerr,
+      systemPrompt: bareSystemPrompt(),
+      thinkingLevel: 'off',
+    });
+
+    const result = await orchestrate({
+      abortSignal: new AbortController().signal,
+      incomingText: 'compare them',
+      now: 1_700_000_000_000,
+      priorMessages: [],
+      telegramUserId: 42,
+    });
+
+    // Both tool calls dispatched, in the order they appeared in the
+    // assistant message.
+    expect(overseerr.detailsCalls).toEqual([
+      { mediaType: 'movie', tmdbId: 414906 },
+      { mediaType: 'movie', tmdbId: 272 },
+    ]);
+    // turnToPersist: user + assistant(2 toolCalls) + toolResult(a) + toolResult(b) + assistant(final).
+    const roles = result.turnToPersist.map(m => m.role);
+    expect(roles).toEqual([
+      'user',
+      'assistant',
+      'toolResult',
+      'toolResult',
+      'assistant',
+    ]);
+    const toolResults = result.turnToPersist.filter(
+      m => m.role === 'toolResult',
+    );
+    // toolCallId on each result must match the call id, not be swapped.
+    expect(
+      toolResults.map(m => (m.role === 'toolResult' ? m.toolCallId : null)),
+    ).toEqual(['parallel_a', 'parallel_b']);
+  });
+
+  it('returns the abort-specific apologetic reply when the master signal fires mid-call', async () => {
     const overseerr = createFakeOverseerr({
       searchResults: [theBatman],
     });
@@ -614,7 +719,13 @@ describe('orchestrator — caps and error paths', () => {
     });
 
     expect(result.replies).toHaveLength(1);
-    expect(result.replies[0]?.kind).toBe('text');
+    const reply = result.replies[0];
+    if (reply?.kind !== 'text') {
+      throw new Error('expected text reply');
+    }
+    // The abort path produces the "took too long" wording, not the generic
+    // model-failure message — users deserve accurate signal.
+    expect(reply.text).toMatch(/too long/i);
   });
 });
 
