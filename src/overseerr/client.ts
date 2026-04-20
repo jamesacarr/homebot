@@ -51,6 +51,39 @@ export interface CreateRequestInput {
   is4k?: boolean;
 }
 
+export interface DetailsRequestInput {
+  tmdbId: number;
+  mediaType: OverseerrMediaType;
+}
+
+export interface CastMember {
+  name: string;
+  character: string | null;
+}
+
+/**
+ * LLM-friendly projection of Overseerr `/movie/{id}` or `/tv/{id}` responses.
+ * The orchestrator forwards this shape to the model as a tool result, so it is
+ * deliberately small — just the fields needed to answer clarifying questions
+ * ("is that the Bale one?", "what's the runtime?").
+ */
+export interface MediaDetails {
+  tmdbId: number;
+  mediaType: OverseerrMediaType;
+  title: string;
+  year: string | null;
+  overview: string | null;
+  releaseDate: string | null;
+  runtime: number | null;
+  status: MediaStatus | null;
+  genres: string[];
+  directors: string[];
+  createdBy: string[];
+  networks: string[];
+  cast: CastMember[];
+  voteAverage: number | null;
+}
+
 export interface CallOptions {
   signal?: AbortSignal;
 }
@@ -62,6 +95,10 @@ export interface OverseerrClient {
     input: CreateRequestInput,
     options?: CallOptions,
   ): Promise<void>;
+  getMediaDetails(
+    input: DetailsRequestInput,
+    options?: CallOptions,
+  ): Promise<MediaDetails>;
 }
 
 export interface CreateOverseerrClientOptions {
@@ -92,6 +129,123 @@ function mapStatus(mediaInfo: unknown): MediaStatus | null {
     return null;
   }
   return MEDIA_STATUS_BY_CODE[code] ?? null;
+}
+
+// Cap so tool-result payloads stay small; the LLM does not need the full
+// cast for a disambiguation reply.
+const MAX_CAST_MEMBERS = 10;
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record !== null) {
+      out.push(record);
+    }
+  }
+  return out;
+}
+
+function extractNames(entries: Record<string, unknown>[]): string[] {
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry.name === 'string') {
+      out.push(entry.name);
+    }
+  }
+  return out;
+}
+
+function extractDirectors(crew: unknown): string[] {
+  const out: string[] = [];
+  for (const entry of asRecordArray(crew)) {
+    if (entry.job === 'Director' && typeof entry.name === 'string') {
+      out.push(entry.name);
+    }
+  }
+  return out;
+}
+
+function extractCast(cast: unknown): CastMember[] {
+  const entries = asRecordArray(cast);
+  // Sort by TMDB `order` (billing order); low order = top billed.
+  entries.sort((a, b) => {
+    const ao = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
+    const bo = typeof b.order === 'number' ? b.order : Number.POSITIVE_INFINITY;
+    return ao - bo;
+  });
+  const out: CastMember[] = [];
+  for (const entry of entries.slice(0, MAX_CAST_MEMBERS)) {
+    if (typeof entry.name !== 'string') {
+      continue;
+    }
+    out.push({
+      character: typeof entry.character === 'string' ? entry.character : null,
+      name: entry.name,
+    });
+  }
+  return out;
+}
+
+function stringFieldOrNull(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function toDetails(raw: unknown, input: DetailsRequestInput): MediaDetails {
+  const r = asRecord(raw);
+  if (r === null) {
+    throw new OverseerrError(
+      `Overseerr ${input.mediaType} details response was not an object`,
+    );
+  }
+
+  const credits = asRecord(r.credits);
+  const cast = extractCast(credits?.cast);
+  const directors = extractDirectors(credits?.crew);
+  const genres = extractNames(asRecordArray(r.genres));
+  const createdBy = extractNames(asRecordArray(r.createdBy));
+  const networks = extractNames(asRecordArray(r.networks));
+
+  // Overseerr uses TMDB-native field names: movies expose `title` + `releaseDate`,
+  // TV exposes `name` + `firstAirDate`.
+  const title =
+    input.mediaType === 'movie'
+      ? stringFieldOrNull(r, 'title')
+      : stringFieldOrNull(r, 'name');
+  if (title === null) {
+    throw new OverseerrError(
+      `Overseerr ${input.mediaType} details response missing title`,
+    );
+  }
+
+  const releaseDate =
+    input.mediaType === 'movie'
+      ? stringFieldOrNull(r, 'releaseDate')
+      : stringFieldOrNull(r, 'firstAirDate');
+
+  return {
+    cast,
+    createdBy,
+    directors,
+    genres,
+    mediaType: input.mediaType,
+    networks,
+    overview: typeof r.overview === 'string' ? r.overview : null,
+    releaseDate,
+    runtime: typeof r.runtime === 'number' ? r.runtime : null,
+    status: mapStatus(r.mediaInfo),
+    title,
+    tmdbId: input.tmdbId,
+    voteAverage: typeof r.voteAverage === 'number' ? r.voteAverage : null,
+    year: extractYear(releaseDate),
+  };
 }
 
 function toCandidate(raw: unknown): SearchCandidate | null {
@@ -259,6 +413,12 @@ export function createOverseerrClient(
         method: 'POST',
         ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
       });
+    },
+    async getMediaDetails(input, callOptions) {
+      const data = await request(`/${input.mediaType}/${input.tmdbId}`, {
+        ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
+      });
+      return toDetails(data, input);
     },
 
     async getStatus(callOptions) {

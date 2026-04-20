@@ -212,6 +212,202 @@ describe('OverseerrClient.search', () => {
   });
 });
 
+describe('OverseerrClient.getMediaDetails', () => {
+  const movieDetails = {
+    credits: {
+      cast: [
+        {
+          character: 'Batman / Bruce Wayne',
+          id: 3894,
+          name: 'Christian Bale',
+          order: 0,
+          profilePath: '/bale.jpg',
+        },
+        {
+          character: 'Henri Ducard',
+          id: 1,
+          name: 'Liam Neeson',
+          order: 1,
+          profilePath: null,
+        },
+      ],
+      crew: [
+        {
+          department: 'Directing',
+          id: 525,
+          job: 'Director',
+          name: 'Christopher Nolan',
+        },
+        {
+          department: 'Writing',
+          id: 525,
+          job: 'Writer',
+          name: 'Christopher Nolan',
+        },
+        { department: 'Editing', id: 999, job: 'Editor', name: 'Lee Smith' },
+      ],
+    },
+    genres: [
+      { id: 28, name: 'Action' },
+      { id: 80, name: 'Crime' },
+    ],
+    id: 272,
+    mediaInfo: { status: 5 },
+    overview: 'A young Bruce Wayne travels to the East...',
+    releaseDate: '2005-06-15',
+    runtime: 140,
+    title: 'Batman Begins',
+    voteAverage: 7.7,
+  };
+
+  it('maps /movie/{id} into a trimmed detail projection with director, cast, and genres', async () => {
+    const { calls, fetch } = makeFetchFake(
+      () => new Response(JSON.stringify(movieDetails), { status: 200 }),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    const details = await client.getMediaDetails({
+      mediaType: 'movie',
+      tmdbId: 272,
+    });
+
+    expect(calls[0]?.url).toBe('http://overseerr:5055/api/v1/movie/272');
+    expect(details).toEqual({
+      cast: [
+        { character: 'Batman / Bruce Wayne', name: 'Christian Bale' },
+        { character: 'Henri Ducard', name: 'Liam Neeson' },
+      ],
+      createdBy: [],
+      directors: ['Christopher Nolan'],
+      genres: ['Action', 'Crime'],
+      mediaType: 'movie',
+      networks: [],
+      overview: 'A young Bruce Wayne travels to the East...',
+      releaseDate: '2005-06-15',
+      runtime: 140,
+      status: 'AVAILABLE',
+      title: 'Batman Begins',
+      tmdbId: 272,
+      voteAverage: 7.7,
+      year: '2005',
+    });
+  });
+
+  it('caps cast at the top 10 entries ordered by `order`', async () => {
+    const manyCast = Array.from({ length: 20 }, (_, i) => ({
+      character: `Character ${i}`,
+      id: i,
+      name: `Actor ${i}`,
+      order: 19 - i,
+      profilePath: null,
+    }));
+    const { fetch } = makeFetchFake(
+      () =>
+        new Response(
+          JSON.stringify({
+            ...movieDetails,
+            credits: { cast: manyCast, crew: [] },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    const details = await client.getMediaDetails({
+      mediaType: 'movie',
+      tmdbId: 272,
+    });
+
+    expect(details.cast).toHaveLength(10);
+    // Lowest `order` should come first (index 19 in the source array).
+    expect(details.cast[0]?.name).toBe('Actor 19');
+  });
+
+  it('maps /tv/{id} into a detail projection with createdBy and networks', async () => {
+    const tvDetails = {
+      createdBy: [
+        { id: 1, name: 'Christopher Storer' },
+        { id: 2, name: 'Joanna Calo' },
+      ],
+      credits: {
+        cast: [
+          {
+            character: 'Carmen',
+            id: 10,
+            name: 'Jeremy Allen White',
+            order: 0,
+            profilePath: null,
+          },
+        ],
+        crew: [],
+      },
+      firstAirDate: '2022-06-23',
+      genres: [{ id: 35, name: 'Comedy' }],
+      id: 136315,
+      mediaInfo: { status: 5 },
+      name: 'The Bear',
+      networks: [
+        { id: 1024, name: 'FX' },
+        { id: 1, name: 'Hulu' },
+      ],
+      overview: 'A young chef returns home...',
+      voteAverage: 8.6,
+    };
+    const { calls, fetch } = makeFetchFake(
+      () => new Response(JSON.stringify(tvDetails), { status: 200 }),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    const details = await client.getMediaDetails({
+      mediaType: 'tv',
+      tmdbId: 136315,
+    });
+
+    expect(calls[0]?.url).toBe('http://overseerr:5055/api/v1/tv/136315');
+    expect(details).toEqual({
+      cast: [{ character: 'Carmen', name: 'Jeremy Allen White' }],
+      createdBy: ['Christopher Storer', 'Joanna Calo'],
+      directors: [],
+      genres: ['Comedy'],
+      mediaType: 'tv',
+      networks: ['FX', 'Hulu'],
+      overview: 'A young chef returns home...',
+      releaseDate: '2022-06-23',
+      runtime: null,
+      status: 'AVAILABLE',
+      title: 'The Bear',
+      tmdbId: 136315,
+      voteAverage: 8.6,
+      year: '2022',
+    });
+  });
+
+  it('throws OverseerrNotFoundError when the title does not exist', async () => {
+    const { fetch } = makeFetchFake(() => new Response('', { status: 404 }));
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    await expect(
+      client.getMediaDetails({ mediaType: 'movie', tmdbId: 404 }),
+    ).rejects.toBeInstanceOf(OverseerrNotFoundError);
+  });
+});
+
 describe('OverseerrClient.createRequest', () => {
   it('POSTs /request with mediaType and mediaId for a movie', async () => {
     const { calls, fetch } = makeFetchFake(
