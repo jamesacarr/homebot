@@ -74,21 +74,48 @@ Rule of thumb: if you catch yourself importing `grammy` from `src/llm/` or
 
 ### Logging
 
-- Always through `src/logging.ts`. Never `console.log` in production code
-  (biome enforces this).
-- Log shape: `{ level, event, message, ...fields }`. Use `event` as a stable
-  string key (e.g. `"request_submitted"`, `"overseerr_timeout"`) — makes logs
-  grep-able.
-- Log audit-worthy actions at `info`: request submitted, access approved,
-  access denied, cost-cap hit, tool error, any timeout.
+- Always through `src/logging.ts` (pino under the hood). Never `console.log`
+  in production code (biome enforces this).
+- Prefer `logger.child({ telegramUserId, turnIndex })` to bind context at a
+  scope rather than passing the same fields on every call.
+- The log message (first arg or `msg` field) should be a stable event name,
+  not free prose. Stable names are grep-able; free text isn't.
+
+#### Canonical event names
+
+Use these names for the listed situations so logs across modules stay
+coherent. Add new names here as they're introduced — don't invent one-offs
+inline.
+
+| Event | Level | Fields |
+|---|---|---|
+| `startup` | info | `version`, `llmModel`, `llmProvider` |
+| `shutdown` | info | `reason` |
+| `health_check_failed` | warn | `check` (which criterion failed) |
+| `llm_call` | info | `telegramUserId`, `turnIndex`, `model` |
+| `llm_call_failed` | error | `telegramUserId`, `err` |
+| `llm_tool_round_cap_hit` | warn | `telegramUserId`, `rounds` |
+| `tool_call` | info | `telegramUserId`, `toolName`, `args` |
+| `tool_error` | warn | `telegramUserId`, `toolName`, `err` |
+| `overseerr_timeout` | warn | `path`, `timeoutMs` |
+| `request_submitted` | info | `telegramUserId`, `tmdbId`, `title`, `mediaType` |
+| `request_duplicate` | info | `telegramUserId`, `tmdbId`, `status` |
+| `access_request_received` | info | `telegramUserId`, `telegramUsername` |
+| `access_approved` | info | `telegramUserId`, `decidedBy` |
+| `access_denied` | info | `telegramUserId`, `decidedBy` |
+| `access_dropped_silently` | debug | `telegramUserId`, `status` |
+| `cost_cap_hit` | warn | `telegramUserId`, `dailyCostUsd`, `capUsd` |
+| `group_chat_rejected` | info | `chatId`, `chatType` |
 
 ### Testing
 
 - Framework: `vitest`.
 - Every Overseerr client method has tests covering happy path + at least one
   error shape + timeout behaviour.
-- Orchestrator tests use `FakeOverseerr` + `FakeLLM` (`test/fakes/`). Scripted
-  tool-call sequences, no network, no real model.
+- Orchestrator tests use `FakeOverseerr` (`test/fakes/`) plus pi-ai's
+  built-in `registerFauxProvider()` + `fauxAssistantMessage()` helpers for
+  scripting LLM responses. **Do not hand-roll a `FakeLLM`** — pi-ai's faux
+  provider is the legitimate external-boundary fake.
 - DB tests use in-memory SQLite (`new Database(":memory:")`).
 - Test names are behavioural, not mechanical: `"refuses to re-request an already-available title"`, not `"testRequestMedia2"`.
 - Prefer minimal mocks. Don't mock what you don't own (e.g. don't mock

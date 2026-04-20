@@ -1,6 +1,6 @@
 ---
 created_at: 2026-04-20T06:51:09Z
-updated_at: 2026-04-20T10:24:36Z
+updated_at: 2026-04-20T11:38:01Z
 status: draft
 ---
 
@@ -670,6 +670,149 @@ caller is `curl` inside the same container. No auth needed.
 - Correct TMDB image size (`w342` is the expected default; confirm).
 - Whether to surface pi-ai's streaming events through to the Telegram "typing…"
   indicator during LLM calls. Probably yes, but low priority.
+
+## Step 5 — LLM orchestrator: implementation notes
+
+Step 5 is substantially bigger than steps 1–4. These notes exist so a fresh
+context can start work without re-deriving decisions from the pi-ai README.
+
+### pi-ai integration
+
+We consume `@mariozechner/pi-ai` directly (not pi-coding-agent). Relevant
+surface:
+
+- `getModel(provider, id)` returns a `Model`. Provider and id come from
+  `config.llmProvider` and `config.llmModel`.
+- `completeSimple(model, context, { reasoning, signal })` — single-turn
+  completion. `reasoning` accepts our `ThinkingLevel` type (`'off' |
+  'minimal' | 'low' | 'medium' | 'high' | 'xhigh'`). Non-reasoning models
+  silently ignore it.
+- `Context = { systemPrompt?: string; messages: Message[]; tools?: Tool[] }`.
+- Tools: `{ name, description, parameters: TypeBox schema }`. Use
+  `@sinclair/typebox`'s `Type.*` helpers; pi-ai re-exports them as `Type`.
+- Messages come in three roles: `user`, `assistant`, `toolResult`. Assistant
+  messages carry a `content` array of blocks (`text`, `toolCall`, `thinking`).
+- The returned `AssistantMessage` has `usage.cost.total` — already in USD,
+  no manual token maths needed. That's what `costDelta` in the orchestrator
+  output reports.
+- Abort: pass the orchestrator's master `AbortSignal` via the call-level
+  options argument.
+
+For tests, pi-ai ships `registerFauxProvider()` plus `fauxAssistantMessage()`,
+`fauxText()`, `fauxToolCall()`, `fauxThinking()`. This is the legitimate
+fake at the external-boundary layer; **do not hand-roll a `FakeLLM`**. Each
+test registers the faux provider, queues scripted responses, runs the
+orchestrator against a fake Overseerr, asserts on outputs, then calls
+`unregister()`.
+
+### Orchestrator types
+
+The orchestrator is Telegram-agnostic and SQLite-agnostic. It's the only
+layer that talks to pi-ai.
+
+```ts
+export interface OrchestratorInput {
+  telegramUserId: number;
+  incomingText: string;
+  priorMessages: unknown[]; // exactly what loadRecentTurnMessages returns
+  now: number;
+  abortSignal: AbortSignal; // the 120s per-message ceiling
+}
+
+export interface OrchestratorOutput {
+  replies: Reply[];
+  turnToPersist: unknown[]; // user message + assistant response + any
+                            // toolUse/toolResult pairs — ready for
+                            // conversations.recordTurn to wrap in v:1
+  costDeltaUsd: number;
+}
+
+export function createOrchestrator(deps: {
+  llmModel: Model;
+  thinkingLevel: ThinkingLevel;
+  overseerr: OverseerrClient;
+  systemPrompt: string;
+  logger: Logger;
+  maxToolRounds?: number; // default 5
+}): (input: OrchestratorInput) => Promise<OrchestratorOutput>;
+```
+
+**The cost-cap check lives OUTSIDE the orchestrator**, in the caller (the
+Telegram adapter or an orchestrator-runner). The caller reads
+`getDailyCost(today)`, compares with `config.dailyCostCapUsd`, and either
+calls the orchestrator or short-circuits with the capped reply. After the
+orchestrator returns, the caller calls `addCost(today, costDelta)`. This
+keeps the orchestrator pure LLM logic with no DB coupling.
+
+**Owner bypass of the cap** also lives in the caller: if the incoming user
+is the owner, skip the pre-call check.
+
+### The access-request flow is NOT the orchestrator's concern
+
+The LLM has no tool to approve or deny access. The access-request flow is
+handled entirely in `src/telegram/` middleware, before any orchestrator call:
+
+- Middleware looks up the user via `findUser(db, telegramUserId)`.
+- If `status === 'approved'` or user is the owner: proceed to the orchestrator.
+- If `status === 'pending' | 'denied'`: silently drop (log at `debug`).
+- If user is unknown: reply with the "Request access" button; do not call
+  the orchestrator. Store the user on button tap via `recordAccessRequest`.
+- The approve/deny callback handler calls `approveUser` / `denyUser`
+  directly, bypasses the orchestrator entirely, and DMs the requester.
+
+This is what keeps the LLM's capability ceiling at three tools.
+
+### Step 5 sub-steps
+
+Break step 5 into three commits, each TDD-driven and independently green:
+
+**5a. `src/llm/tools.ts`** — pi-ai `Tool[]` definitions plus a tool dispatcher.
+
+- Three tools for v1: `search_media`, `get_media_details`, `request_media`.
+- `get_media_details` requires adding `getMediaDetails` to `OverseerrClient`
+  first (deferred from step 4); do it as the first TDD cycle in 5a.
+- TypeBox schemas for parameters.
+- Each tool's `execute` calls the appropriate `OverseerrClient` method and
+  maps the result to the tool's output shape (LLM-friendly projection, not
+  the raw Overseerr response).
+- Error mapping: catch `OverseerrError` subclasses and return a tool result
+  with `isError: true` and a terse message (not a stack trace). The LLM
+  then sees one of a small set of strings
+  (`already_requested`, `not_found`, `timeout`, `error`) and phrases a
+  reply.
+
+**5b. `src/llm/prompt.ts`** — lift the `## System prompt draft` section
+above into an exported string constant. Trivial; commit separately so the
+prompt-iteration history stays cleanly attributable.
+
+**5c. `src/llm/orchestrator.ts`** — the main loop.
+
+- Builds `Context` from `systemPrompt`, `priorMessages`, and the new user
+  message.
+- Calls `completeSimple(model, context, { reasoning, signal })`.
+- Collects `toolCall` blocks from the assistant message; dispatches each
+  via `tools.ts`; appends `toolResult` messages to the context; loops.
+- Exits when the LLM returns a final text response with no tool calls, or
+  when `maxToolRounds` is reached.
+- On cap hit: return an apologetic text reply; log at `warn`.
+- On `AbortError`: check whether the abort came from the master signal;
+  return an apologetic text reply; log at `warn`.
+- **Tool call → visible `Reply` mapping lives here**: when the LLM calls
+  `search_media` and the orchestrator sees multiple candidates in the tool
+  result, it fans the eventual reply out into three `photo` + one
+  `keyboard` entries. The LLM's own text ends up as the first `text`
+  reply (or is dropped if the orchestrator decides the picker is enough).
+- Returns `{ replies, turnToPersist, costDeltaUsd }`.
+
+### MarkdownV2 escaping is the Telegram adapter's job
+
+The LLM emits natural Markdown (`*bold*`, `` `code` ``) in its text output.
+Telegram's MarkdownV2 parser requires `_ * [ ] ( ) ~ > # + - = | { } . !`
+to be backslash-escaped when they appear in non-formatting positions.
+Handling that escaping inside the prompt is fragile; it belongs in
+`src/telegram/render.ts`, which knows the final output format. The
+orchestrator emits `Reply` objects whose `text` is plain Markdown; the
+adapter escapes before sending.
 
 ## Implementation order
 
