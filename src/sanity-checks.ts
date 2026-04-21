@@ -36,56 +36,55 @@ export interface SanityCheckDeps {
  *  3. Telegram `getMe()` succeeds (token valid).
  *  4. Telegram `getChat(OWNER)` resolves (owner id is a real user reachable).
  *
- * Throws `SanityCheckError` collecting every failure, so the operator sees
- * all issues at once instead of fixing them one at a time.
+ * Checks run in parallel and every failure is collected into one error, so
+ * the operator sees all issues at once instead of fixing them one at a time.
  */
 export async function runSanityChecks(deps: SanityCheckDeps): Promise<void> {
-  const issues: SanityCheckIssue[] = [];
+  const outcomes = await Promise.all([
+    runCheck('db_select', async () => {
+      await deps.db.selectNoFrom(eb => eb.lit(1).as('one')).executeTakeFirst();
+    }),
+    runCheck('overseerr_status', async () => {
+      await deps.overseerr.getStatus({
+        signal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
+      });
+    }),
+    runCheck('telegram_get_me', async () => {
+      await deps.bot.api.getMe();
+    }),
+    runCheck('telegram_get_owner_chat', async () => {
+      try {
+        await deps.bot.api.getChat(deps.ownerTelegramUserId);
+      } catch (error) {
+        // Telegram's `getChat` needs a prior message from the owner (the bot
+        // has no way to reach users who haven't spoken to it first). Add a
+        // one-line hint to the error so the operator doesn't chase a
+        // phantom misconfiguration.
+        const base = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${base} — ensure the owner has DMed the bot at least once so Telegram knows the chat exists.`,
+        );
+      }
+    }),
+  ]);
 
-  // 1. DB.
-  try {
-    await deps.db.selectNoFrom(eb => eb.lit(1).as('one')).executeTakeFirst();
-  } catch (error) {
-    issues.push({
-      check: 'db_select',
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // 2. Overseerr.
-  try {
-    await deps.overseerr.getStatus({
-      signal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
-    });
-  } catch (error) {
-    issues.push({
-      check: 'overseerr_status',
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // 3. Telegram getMe.
-  try {
-    await deps.bot.api.getMe();
-  } catch (error) {
-    issues.push({
-      check: 'telegram_get_me',
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // 4. Telegram getChat(owner). Without this we'd happily start a bot whose
-  // owner can't be DM'd, so access requests would silently fail at runtime.
-  try {
-    await deps.bot.api.getChat(deps.ownerTelegramUserId);
-  } catch (error) {
-    issues.push({
-      check: 'telegram_get_owner_chat',
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
+  const issues = outcomes.filter((o): o is SanityCheckIssue => o !== null);
   if (issues.length > 0) {
     throw new SanityCheckError(issues);
+  }
+}
+
+async function runCheck(
+  check: string,
+  fn: () => Promise<void>,
+): Promise<SanityCheckIssue | null> {
+  try {
+    await fn();
+    return null;
+  } catch (error) {
+    return {
+      check,
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 }
