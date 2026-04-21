@@ -31,10 +31,11 @@ RUN pnpm prune --prod --ignore-scripts
 # --- Production stage ------------------------------------------------------
 FROM node:24-alpine AS production
 
-# Build-time arg populated by CI from the commit SHA; surfaced at runtime
-# so the /health endpoint can report which version is running.
+# Build-time arg populated by CI from the commit short SHA; surfaced at
+# runtime so the startup log reports which image is running. The env-var
+# name must match what `src/index.ts` reads (process.env.VERSION).
 ARG VERSION=dev
-ENV HOMEBOT_VERSION=$VERSION
+ENV VERSION=$VERSION
 
 # curl: used by the compose-level healthcheck.
 RUN apk add --no-cache curl \

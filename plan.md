@@ -1,6 +1,6 @@
 ---
 created_at: 2026-04-20T06:51:09Z
-updated_at: 2026-04-21T00:42:50Z
+updated_at: 2026-04-21T00:55:56Z
 status: draft
 ---
 
@@ -628,7 +628,6 @@ homebot:
     LLM_MODEL: claude-haiku-4-5
     LLM_THINKING_LEVEL: "off"
     ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
-    VERSION: ${HOMEBOT_VERSION}           # surfaces in the startup log
     TZ: ${TIMEZONE}
   healthcheck:
     test: [ "CMD", "curl", "--fail", "http://127.0.0.1:3000/health" ]
@@ -644,6 +643,12 @@ homebot:
 
 Secrets read via `${...}` from the NAS's own `.env` file (same convention
 the rest of the stack already uses) — never committed, never pasted inline.
+
+Version info is baked into the image by CI (`VERSION` build-arg populated
+from the commit short SHA) and surfaces in the startup log. No
+compose-level `VERSION:` entry: an unset `HOMEBOT_VERSION` in NAS `.env`
+would override the baked value with an empty string, which is a silent
+footgun. The image is the single source of truth for its own version.
 
 ### `:latest` + Watchtower
 
