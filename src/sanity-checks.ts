@@ -57,12 +57,13 @@ export async function runSanityChecks(deps: SanityCheckDeps): Promise<void> {
         await deps.bot.api.getChat(deps.ownerTelegramUserId);
       } catch (error) {
         // Telegram's `getChat` needs a prior message from the owner (the bot
-        // has no way to reach users who haven't spoken to it first). Add a
-        // one-line hint to the error so the operator doesn't chase a
-        // phantom misconfiguration.
-        const base = error instanceof Error ? error.message : String(error);
+        // has no way to reach users who haven't spoken to it first). Wrap
+        // the original error with a hint; `describeError` will unroll the
+        // cause chain so the operator sees both the hint and the real
+        // network reason (DNS, routing, TLS, ...) in one line.
         throw new Error(
-          `${base} — ensure the owner has DMed the bot at least once so Telegram knows the chat exists.`,
+          'ensure the owner has DMed the bot at least once so Telegram knows the chat exists',
+          { cause: error },
         );
       }
     }),
@@ -82,9 +83,36 @@ async function runCheck(
     await fn();
     return null;
   } catch (error) {
-    return {
-      check,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    return { check, message: describeError(error) };
   }
+}
+
+/**
+ * Flatten an error and every unwrappable cause into a single `a → b → c`
+ * line. Walks both the standard `Error.cause` and grammY's non-standard
+ * `HttpError.error` (which predates `cause` being widely available and
+ * never got retrofitted). Without this, a Telegram outage surfaces as the
+ * generic "Network request for 'getMe' failed!" with the real reason
+ * (ENOTFOUND, ETIMEDOUT, TLS, ...) discarded one level down.
+ */
+function describeError(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      if (current.message) {
+        parts.push(current.message);
+      }
+      const next =
+        (current as { cause?: unknown }).cause ??
+        (current as { error?: unknown }).error;
+      current = next;
+    } else {
+      parts.push(String(current));
+      current = undefined;
+    }
+  }
+  return parts.join(' → ');
 }
