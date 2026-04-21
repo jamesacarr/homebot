@@ -22,6 +22,7 @@ import { asTelegramOutboundApi } from './adapter.js';
 import { renderReplies } from './render.js';
 import { runTextTurn } from './run-text-turn.js';
 import { handleSelection } from './selection.js';
+import { sendTypingOnce, startTypingHeartbeat } from './typing.js';
 
 export interface CreateBotDeps {
   token: string;
@@ -76,6 +77,7 @@ export function createBot(deps: CreateBotDeps): Bot {
     const text = ctx.message.text;
 
     await userLock.acquire(userId, async () => {
+      const userLog = log.child({ telegramUserId: userId });
       const result = await runTextTurn({
         capUsd: deps.capUsd,
         db: deps.db,
@@ -85,6 +87,10 @@ export function createBot(deps: CreateBotDeps): Bot {
         now: now(),
         orchestrate: deps.orchestrate,
         ownerTelegramUserId: deps.ownerTelegramUserId,
+        // Show "homebot is typing…" for the duration of the orchestrator
+        // call. Heartbeat — not a single ping — because LLM + tool chains
+        // can take 10+ seconds and Telegram's indicator expires after 5s.
+        startTyping: () => startTypingHeartbeat(ctx.api, chatId, userLog),
         telegramUserId: userId,
         ...(username === null ? {} : { telegramUsername: username }),
       });
@@ -214,6 +220,11 @@ export function createBot(deps: CreateBotDeps): Bot {
 
     if (decoded.kind === 'pick') {
       await userLock.acquire(fromId, async () => {
+        // Fire-and-forget typing ping: handleSelection does one Overseerr
+        // call (~100ms); a single chat action is enough and racing it
+        // against the tool dispatch keeps perceived latency down.
+        const fromLog = log.child({ telegramUserId: fromId });
+        void sendTypingOnce(ctx.api, chatId, fromLog);
         const result = await handleSelection({
           db: deps.db,
           dispatcher: deps.toolDispatcher,
