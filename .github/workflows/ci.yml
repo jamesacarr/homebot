@@ -25,10 +25,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      # Pin the timezone so any date/time logic in tests is deterministic.
+      # GitHub-hosted ubuntu runners already default to UTC, but explicit
+      # beats implicit — and Node reads TZ at startup.
+      TZ: UTC
     steps:
-      - uses: szenius/set-timezone@v2.0
-        with:
-          timezoneLinux: UTC
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
