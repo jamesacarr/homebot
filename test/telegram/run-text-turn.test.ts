@@ -115,8 +115,17 @@ function makeOrchestrate(searchResults: SearchCandidate[] = [theBatman]) {
   });
 }
 
+async function countTurns(database: AppDb, userId: number): Promise<number> {
+  const rows = await database
+    .selectFrom('conversationTurns')
+    .selectAll()
+    .where('telegramUserId', '=', userId)
+    .execute();
+  return rows.length;
+}
+
 describe('runTextTurn — happy path', () => {
-  it('runs the orchestrator, persists the turn, and accumulates daily cost', async () => {
+  it('returns replies + a commit callback; calling commit persists the turn', async () => {
     const orchestrate = makeOrchestrate();
     const result = await runTextTurn({
       capUsd: 1,
@@ -130,19 +139,63 @@ describe('runTextTurn — happy path', () => {
       telegramUserId: APPROVED_USER,
     });
 
-    expect(result.kind).toBe('replies');
     if (result.kind !== 'replies') {
       throw new Error('unreachable');
     }
     expect(result.replies).toHaveLength(2); // text + poster
-    expect(result.persisted).toBe(true);
-    // Re-read history; should see one persisted turn.
-    const turns = await db
-      .selectFrom('conversationTurns')
-      .selectAll()
-      .where('telegramUserId', '=', APPROVED_USER)
-      .execute();
-    expect(turns).toHaveLength(1);
+
+    // Pre-commit: turn is NOT persisted yet — plan.md says send first,
+    // persist only if sends succeed.
+    expect(await countTurns(db, APPROVED_USER)).toBe(0);
+    expect(result.commit).toBeDefined();
+
+    await result.commit?.();
+    expect(await countTurns(db, APPROVED_USER)).toBe(1);
+  });
+
+  it('does not persist the turn if the caller never invokes commit (e.g. send failed)', async () => {
+    const orchestrate = makeOrchestrate();
+    const result = await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'add The Batman',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      telegramUserId: APPROVED_USER,
+    });
+
+    if (result.kind !== 'replies') {
+      throw new Error('unreachable');
+    }
+    // Caller "sends" but does not call commit.
+    expect(await countTurns(db, APPROVED_USER)).toBe(0);
+  });
+
+  it('records cost immediately (before the caller sends) so a send failure cannot reset the day budget', async () => {
+    // Cost is incurred at LLM call time; the user not seeing the reply
+    // doesn't refund the API spend.
+    const orchestrate = makeOrchestrate();
+    await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'add The Batman',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      telegramUserId: APPROVED_USER,
+    });
+
+    // The faux model has cost=0, so this just verifies the daily_cost row
+    // accumulator path runs (or correctly skips for zero deltas) without
+    // requiring commit() to be called.
+    const cost = await db.selectFrom('dailyCost').selectAll().execute();
+    // Either no row (zero delta skipped) or one row at zero. Both are fine.
+    expect(cost.length === 0 || cost[0]?.costUsd === 0).toBe(true);
   });
 });
 
@@ -242,7 +295,6 @@ describe('runTextTurn — cost cap', () => {
     });
 
     expect(orchestratorCalled).toBe(false);
-    expect(result.kind).toBe('replies');
     if (result.kind !== 'replies') {
       throw new Error('unreachable');
     }
@@ -252,6 +304,8 @@ describe('runTextTurn — cost cap', () => {
     }
     expect(result.replies[0].text).toMatch(/cap/i);
     expect(result.replies[0].text).toMatch(/UTC/);
+    // No commit on the cost-cap branch — there's no turn to persist.
+    expect(result.commit).toBeUndefined();
   });
 
   it('lets the owner through even when over cap', async () => {

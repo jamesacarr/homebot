@@ -16,14 +16,14 @@ import {
 } from './cost-cap.js';
 
 /**
- * Default budget for the orchestrator's master `AbortSignal` \u2014 the per-message
+ * Default budget for the orchestrator's master `AbortSignal` — the per-message
  * ceiling from plan.md. The caller can override for tests.
  */
 const DEFAULT_PER_MESSAGE_TIMEOUT_MS = 120_000;
 
 export interface RunTextTurnInput {
   telegramUserId: number;
-  /** Optional username \u2014 stored on the users row when an unknown user later taps Request access. */
+  /** Optional username — stored on the users row when an unknown user later taps Request access. */
   telegramUsername?: string;
   incomingText: string;
   now: number;
@@ -45,30 +45,36 @@ export interface RunTextTurnInput {
   perMessageTimeoutMs?: number;
 }
 
+export interface ReplyResult {
+  kind: 'replies';
+  replies: Reply[];
+  /**
+   * Persistence callback. Caller invokes it ONLY after all sends in `replies`
+   * succeed (plan.md: send first, persist on success). Absent on paths where
+   * there is no orchestrator turn to persist (cost-cap rejection, etc.).
+   */
+  commit?: () => Promise<void>;
+}
+
 export type RunTextTurnResult =
-  | {
-      kind: 'replies';
-      replies: Reply[];
-      /** True iff the turn was persisted to `conversation_turns`. */
-      persisted: boolean;
-    }
+  | ReplyResult
   | { kind: 'prompt_for_access'; replies: Reply[] }
   | { kind: 'drop_silently' };
 
 /**
  * Drives one inbound user text message end-to-end:
  *
- *   access check \u2192 cost cap \u2192 load history \u2192 orchestrate \u2192 persist + record cost
+ *   access check → cost cap → load history → orchestrate → record cost
  *
- * Returns either replies for the adapter to send, a `prompt_for_access`
- * decision (the adapter renders the Request-access button), or a silent drop.
+ * Returns replies for the adapter to send, plus an optional `commit()` the
+ * caller invokes after sends succeed to persist the turn. This split enforces
+ * plan.md's persistence ordering: "send first, persist on success" — if sends
+ * fail the caller skips commit() and the user's retry starts cleanly.
  *
- * Persistence semantics: this function does NOT itself persist the turn until
- * AFTER the orchestrator returns successfully. The caller is responsible for
- * sending replies; if sends fail, the caller is expected to skip the
- * persistence step \u2014 but `persisted: true` here means we already wrote the
- * turn. Plan.md prefers the inverse (send first, then persist) to avoid stale
- * history when sends fail; the trade-off is that persistence happens before\n * sends, so a send failure can leave the DB ahead of what the user saw. We\n * accept this for v1: the LLM seeing one extra historical turn is a much\n * smaller correctness issue than NOT persisting a successful interaction.\n */
+ * Cost recording happens BEFORE we return: the LLM call has already been
+ * billed by the time the orchestrator resolves, so a downstream send failure
+ * must not refund the day's budget.
+ */
 export async function runTextTurn(
   input: RunTextTurnInput,
 ): Promise<RunTextTurnResult> {
@@ -111,7 +117,6 @@ export async function runTextTurn(
     log.warn({ capUsd: input.capUsd, dailyCostUsd: dailyCost }, 'cost_cap_hit');
     return {
       kind: 'replies',
-      persisted: false,
       replies: [
         {
           kind: 'text',
@@ -149,7 +154,6 @@ export async function runTextTurn(
     log.error({ err: error }, 'llm_call_failed');
     return {
       kind: 'replies',
-      persisted: false,
       replies: [
         {
           kind: 'text',
@@ -159,20 +163,25 @@ export async function runTextTurn(
     };
   }
 
-  // 5. Persist + record cost.
-  await recordTurn(input.db, {
-    maxTurns: input.maxTurnsInHistory,
-    messages: output.turnToPersist,
-    now: input.now,
-    telegramUserId: input.telegramUserId,
-  });
+  // 5. Record cost immediately. The LLM call has been billed; a downstream
+  // send failure must not refund the day budget.
   if (output.costDeltaUsd > 0) {
     await addCost(input.db, today, output.costDeltaUsd);
   }
-  await touchLastRequestAt(input.db, {
-    now: input.now,
-    telegramUserId: input.telegramUserId,
-  });
 
-  return { kind: 'replies', persisted: true, replies: output.replies };
+  // 6. Hand the caller a commit() that persists the turn on successful send.
+  const commit = async (): Promise<void> => {
+    await recordTurn(input.db, {
+      maxTurns: input.maxTurnsInHistory,
+      messages: output.turnToPersist,
+      now: input.now,
+      telegramUserId: input.telegramUserId,
+    });
+    await touchLastRequestAt(input.db, {
+      now: input.now,
+      telegramUserId: input.telegramUserId,
+    });
+  };
+
+  return { commit, kind: 'replies', replies: output.replies };
 }

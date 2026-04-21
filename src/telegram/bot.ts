@@ -104,10 +104,18 @@ export function createBot(deps: CreateBotDeps): Bot {
             text: 'Tap to send the request:',
           },
         ];
-        await renderReplies(asTelegramOutboundApi(ctx.api), chatId, replies);
+        try {
+          await renderReplies(asTelegramOutboundApi(ctx.api), chatId, replies);
+        } catch (error) {
+          log.error({ err: error, telegramUserId: userId }, 'render_failed');
+        }
         return;
       }
-      // kind === 'replies'
+
+      // kind === 'replies'. Send first; only persist (commit) if every send
+      // succeeded — plan.md's preferred ordering. A persist that races ahead
+      // of a failed send leaves the LLM's history out of sync with what the
+      // user actually saw on their retry.
       try {
         await renderReplies(
           asTelegramOutboundApi(ctx.api),
@@ -116,6 +124,14 @@ export function createBot(deps: CreateBotDeps): Bot {
         );
       } catch (error) {
         log.error({ err: error, telegramUserId: userId }, 'render_failed');
+        return;
+      }
+      if (result.commit) {
+        try {
+          await result.commit();
+        } catch (error) {
+          log.error({ err: error, telegramUserId: userId }, 'persist_failed');
+        }
       }
     });
   });
@@ -180,6 +196,7 @@ export function createBot(deps: CreateBotDeps): Bot {
           pick: { mediaType: decoded.mediaType, tmdbId: decoded.tmdbId },
           telegramUserId: fromId,
         });
+        // Send first; bail without persisting if any send fails.
         try {
           await renderReplies(
             asTelegramOutboundApi(ctx.api),
@@ -188,6 +205,7 @@ export function createBot(deps: CreateBotDeps): Bot {
           );
         } catch (error) {
           log.error({ err: error, telegramUserId: fromId }, 'render_failed');
+          return;
         }
         // Persist the synthetic turn AFTER successful sends.
         try {
