@@ -8,10 +8,12 @@ import {
 import { createUserLock } from '../concurrency.js';
 import { recordTurn } from '../db/conversations.js';
 import type { AppDb } from '../db/index.js';
+import { findUser } from '../db/users.js';
 import type { Orchestrator } from '../llm/orchestrator.js';
 import type { ToolDispatcher } from '../llm/tools.js';
 import type { Logger } from '../logging.js';
 import type { OverseerrClient } from '../overseerr/client.js';
+import { allowCallback } from './access.js';
 import {
   handleAccessDecision,
   handleAccessRequest,
@@ -143,13 +145,40 @@ export function createBot(deps: CreateBotDeps): Bot {
       return;
     }
     const decoded = decodeCallbackData(ctx.callbackQuery.data);
+    // Always answer the callback query to clear the spinner on the user's
+    // end, even if we're going to drop the tap afterwards.
+    await ctx.answerCallbackQuery();
     if (decoded === null) {
-      // Acknowledge so the spinner clears, but ignore the click.
-      await ctx.answerCallbackQuery();
       return;
     }
-    // Always answer the callback query to clear the loading spinner.
-    await ctx.answerCallbackQuery();
+
+    // Access gate: a user we've silently dropped on the text path must not
+    // be able to sneak in via a stale button. `access_request` is the one
+    // tap unknown users are allowed to make — the handler itself enforces
+    // idempotency so re-taps after decision don't re-notify.
+    if (decoded.kind !== 'access_request') {
+      const userRow = await findUser(deps.db, fromId);
+      if (
+        !allowCallback({
+          ownerTelegramUserId: deps.ownerTelegramUserId,
+          senderTelegramUserId: fromId,
+          userRow,
+        })
+      ) {
+        log.debug(
+          {
+            callbackKind: decoded.kind,
+            status: userRow?.status,
+            telegramUserId: fromId,
+          },
+          'access_dropped_silently',
+        );
+        return;
+      }
+    }
+
+    // Access decisions are special: only the owner is allowed; the handler
+    // itself enforces `from === owner`.
 
     const adapter = {
       send: async (

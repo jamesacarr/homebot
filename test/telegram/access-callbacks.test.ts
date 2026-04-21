@@ -80,7 +80,7 @@ describe('handleAccessRequest', () => {
     expect(requesterDm.replies[0].text).toMatch(/sent|requested/i);
   });
 
-  it('does not duplicate the row when the same user re-taps Request access', async () => {
+  it('silently ignores a re-tap by an already-recorded user to avoid spamming the owner', async () => {
     // First tap.
     const first = makeAdapter();
     await handleAccessRequest({
@@ -93,7 +93,9 @@ describe('handleAccessRequest', () => {
       requesterUsername: 'jane',
     });
 
-    // Second tap (same user). Should not throw on the unique-key collision.
+    // Second tap (same user) — must NOT re-DM owner or requester. The first
+    // notification is sufficient; repeating invites owner spam (especially
+    // from a denied user tapping a stale button, once #1 is fixed).
     const second = makeAdapter();
     await handleAccessRequest({
       adapter: second.adapter,
@@ -105,15 +107,14 @@ describe('handleAccessRequest', () => {
       requesterUsername: 'jane',
     });
 
-    // Still one row, still pending. The owner is re-DM'd (they may have
-    // missed the first one) and the requester gets a fresh confirmation.
+    // Still one row, still pending. No new DMs went out on the second tap.
     const rows = await db
       .selectFrom('users')
       .selectAll()
       .where('telegramUserId', '=', REQUESTER_ID)
       .execute();
     expect(rows).toHaveLength(1);
-    expect(second.sent.some(s => s.chatId === OWNER_ID)).toBe(true);
+    expect(second.sent).toHaveLength(0);
   });
 });
 

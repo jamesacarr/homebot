@@ -31,10 +31,11 @@ export interface HandleAccessRequestInput {
 /**
  * Handle a tap on the "Request access" button by an unknown user.
  *
- * Idempotent: if the user already has a row, we re-DM the owner (in case they
- * missed it) and re-confirm to the requester, but do not insert again.
- * Plan.md: pending and denied users are already silently dropped on inbound
- * messages, so there is no abuse vector in re-DM-ing here.
+ * Idempotent: if the user already has a row we silently no-op — re-DM-ing
+ * the owner on every stale tap would be a spam vector (a denied user who
+ * still has the button in their scroll history could chain taps). The
+ * status-gated silent-drop on text messages + one-shot owner notification
+ * here are sufficient per plan.md.
  */
 export async function handleAccessRequest(
   input: HandleAccessRequestInput,
@@ -44,13 +45,16 @@ export async function handleAccessRequest(
   });
 
   const existing = await findUser(input.db, input.requesterTelegramUserId);
-  if (existing === null) {
-    await recordAccessRequest(input.db, {
-      now: input.now,
-      telegramUserId: input.requesterTelegramUserId,
-      telegramUsername: input.requesterUsername,
-    });
+  if (existing !== null) {
+    log.debug({ status: existing.status }, 'access_request_ignored_existing');
+    return;
   }
+
+  await recordAccessRequest(input.db, {
+    now: input.now,
+    telegramUserId: input.requesterTelegramUserId,
+    telegramUsername: input.requesterUsername,
+  });
 
   log.info(
     { telegramUsername: input.requesterUsername },

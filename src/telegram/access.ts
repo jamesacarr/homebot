@@ -36,3 +36,17 @@ export function decideAccess(input: DecideAccessInput): AccessDecision {
   }
   return { kind: 'drop_silently', status: input.userRow.status };
 }
+
+/**
+ * Whether an inbound callback tap (picker, access_request, etc.) from
+ * `senderTelegramUserId` should be processed.
+ *
+ * Stricter than the text-message policy: unknown users are rejected outright
+ * rather than prompted. A user only gets a button from the bot AFTER they've
+ * made it through `decideAccess`, so an unknown sender tapping a button
+ * means either a stale tap after DB loss, or a leaked callback_data used by
+ * someone who bypassed the text-message gate. Neither should proceed.
+ */
+export function allowCallback(input: DecideAccessInput): boolean {
+  return decideAccess(input).kind === 'proceed';
+}

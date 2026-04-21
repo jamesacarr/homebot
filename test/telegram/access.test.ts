@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { User } from '../../src/db/users.js';
-import { decideAccess } from '../../src/telegram/access.js';
+import { allowCallback, decideAccess } from '../../src/telegram/access.js';
 
 const OWNER_ID = 11111;
 
@@ -89,5 +89,67 @@ describe('decideAccess', () => {
         userRow: makeUser({ status: 'revoked' }),
       }),
     ).toEqual({ kind: 'drop_silently', status: 'revoked' });
+  });
+});
+
+describe('allowCallback', () => {
+  it('allows the owner', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: OWNER_ID,
+        userRow: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('allows approved non-owner users', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: 22222,
+        userRow: makeUser({ status: 'approved' }),
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects unknown users (no row) — stricter than decideAccess which prompts them', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: 22222,
+        userRow: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects pending users tapping stale buttons', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: 22222,
+        userRow: makeUser({ status: 'pending' }),
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects denied users tapping stale buttons', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: 22222,
+        userRow: makeUser({ status: 'denied' }),
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects revoked users tapping stale buttons', () => {
+    expect(
+      allowCallback({
+        ownerTelegramUserId: OWNER_ID,
+        senderTelegramUserId: 22222,
+        userRow: makeUser({ status: 'revoked' }),
+      }),
+    ).toBe(false);
   });
 });
