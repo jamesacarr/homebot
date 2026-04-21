@@ -198,6 +198,10 @@ export function createBot(deps: CreateBotDeps): Bot {
         logger: log,
         now: now(),
         ownerTelegramUserId: deps.ownerTelegramUserId,
+        // Telegram guarantees `first_name` on a real user; fall back to an
+        // empty string only as a defensive precaution for weird payloads.
+        requesterFirstName: ctx.from?.first_name ?? '',
+        requesterLastName: ctx.from?.last_name ?? null,
         requesterTelegramUserId: fromId,
         requesterUsername: ctx.from?.username ?? null,
       });

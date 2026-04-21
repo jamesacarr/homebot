@@ -20,12 +20,40 @@ export interface AccessAdapter {
 
 export interface HandleAccessRequestInput {
   requesterTelegramUserId: number;
+  /** Telegram guarantees `first_name`; we rely on that. */
+  requesterFirstName: string;
+  requesterLastName: string | null;
   requesterUsername: string | null;
   ownerTelegramUserId: number;
   now: number;
   db: AppDb;
   adapter: AccessAdapter;
   logger: Logger;
+}
+
+/**
+ * Build a human display string for the owner DM. Order of preference:
+ *   "First Last (@username, `id`)"
+ *   "First (@username, `id`)"
+ *   "First Last (`id`)"
+ *   "First (`id`)"
+ * The id is kept code-formatted so the owner can tell where names end
+ * and identifiers begin even if a requester picks an odd display name.
+ */
+function formatRequester(input: {
+  firstName: string;
+  lastName: string | null;
+  username: string | null;
+  id: number;
+}): string {
+  const name = input.lastName
+    ? `${input.firstName} ${input.lastName}`
+    : input.firstName;
+  const idPart = `\`${input.id}\``;
+  if (input.username) {
+    return `${name} (@${input.username}, ${idPart})`;
+  }
+  return `${name} (${idPart})`;
 }
 
 /**
@@ -61,17 +89,14 @@ export async function handleAccessRequest(
     'access_request_received',
   );
 
-  // Display name in the owner DM. Use the username if we have one, otherwise
-  // the numeric id so the owner has something to identify the requester by.
-  const display = input.requesterUsername
-    ? `@${input.requesterUsername}`
-    : `user`;
+  const display = formatRequester({
+    firstName: input.requesterFirstName,
+    id: input.requesterTelegramUserId,
+    lastName: input.requesterLastName,
+    username: input.requesterUsername,
+  });
 
   await input.adapter.send(input.ownerTelegramUserId, [
-    {
-      kind: 'text',
-      text: `${display} (\`${input.requesterTelegramUserId}\`) is requesting access.`,
-    },
     {
       buttons: [
         {
@@ -90,7 +115,7 @@ export async function handleAccessRequest(
         },
       ],
       kind: 'keyboard',
-      text: 'Decide:',
+      text: `Access request from ${display}.`,
     },
   ]);
 

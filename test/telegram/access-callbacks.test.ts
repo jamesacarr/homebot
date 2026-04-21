@@ -51,6 +51,8 @@ describe('handleAccessRequest', () => {
       logger: silentLogger,
       now: 1234,
       ownerTelegramUserId: OWNER_ID,
+      requesterFirstName: 'Jane',
+      requesterLastName: 'Doe',
       requesterTelegramUserId: REQUESTER_ID,
       requesterUsername: 'jane',
     });
@@ -59,13 +61,20 @@ describe('handleAccessRequest', () => {
     expect(row?.status).toBe('pending');
     expect(row?.telegramUsername).toBe('jane');
 
-    // Owner gets a DM with approve/deny buttons.
+    // Owner gets a single DM with the requester's display info AND the
+    // approve/deny buttons attached as an inline keyboard — no separate
+    // "Decide:" prompt.
     const ownerDm = sent.find(s => s.chatId === OWNER_ID);
     expect(ownerDm).toBeDefined();
-    const keyboard = ownerDm?.replies.find(r => r.kind === 'keyboard');
+    expect(ownerDm?.replies).toHaveLength(1);
+    const keyboard = ownerDm?.replies[0];
     if (keyboard?.kind !== 'keyboard') {
       throw new Error('expected a keyboard reply for the owner');
     }
+    expect(keyboard.text).toContain('Jane');
+    expect(keyboard.text).toContain('Doe');
+    expect(keyboard.text).toContain('jane');
+    expect(keyboard.text).toContain(String(REQUESTER_ID));
     expect(keyboard.buttons.map(b => b.data)).toEqual([
       `approve:${REQUESTER_ID}`,
       `deny:${REQUESTER_ID}`,
@@ -80,6 +89,32 @@ describe('handleAccessRequest', () => {
     expect(requesterDm.replies[0].text).toMatch(/sent|requested/i);
   });
 
+  it('includes the requester even when last_name and username are absent', async () => {
+    const { adapter, sent } = makeAdapter();
+
+    await handleAccessRequest({
+      adapter,
+      db,
+      logger: silentLogger,
+      now: 1234,
+      ownerTelegramUserId: OWNER_ID,
+      requesterFirstName: 'Solo',
+      requesterLastName: null,
+      requesterTelegramUserId: REQUESTER_ID,
+      requesterUsername: null,
+    });
+
+    const ownerDm = sent.find(s => s.chatId === OWNER_ID);
+    const keyboard = ownerDm?.replies[0];
+    if (keyboard?.kind !== 'keyboard') {
+      throw new Error('expected keyboard reply');
+    }
+    expect(keyboard.text).toContain('Solo');
+    expect(keyboard.text).toContain(String(REQUESTER_ID));
+    // No stray "null" or "undefined" leaking into the display text.
+    expect(keyboard.text).not.toMatch(/null|undefined/);
+  });
+
   it('silently ignores a re-tap by an already-recorded user to avoid spamming the owner', async () => {
     // First tap.
     const first = makeAdapter();
@@ -89,6 +124,8 @@ describe('handleAccessRequest', () => {
       logger: silentLogger,
       now: 1000,
       ownerTelegramUserId: OWNER_ID,
+      requesterFirstName: 'Jane',
+      requesterLastName: null,
       requesterTelegramUserId: REQUESTER_ID,
       requesterUsername: 'jane',
     });
@@ -103,6 +140,8 @@ describe('handleAccessRequest', () => {
       logger: silentLogger,
       now: 2000,
       ownerTelegramUserId: OWNER_ID,
+      requesterFirstName: 'Jane',
+      requesterLastName: null,
       requesterTelegramUserId: REQUESTER_ID,
       requesterUsername: 'jane',
     });
