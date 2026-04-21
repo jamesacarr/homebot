@@ -109,4 +109,47 @@ describe('loadConfig', () => {
       loadConfig({ ...completeEnv, OVERSEERR_URL: 'not-a-url' }),
     ).toThrow('OVERSEERR_URL');
   });
+
+  it('throws when the configured LLM provider has no API key env var set', () => {
+    const { ANTHROPIC_API_KEY: _unused, ...envMissingKey } = completeEnv;
+
+    expect(() => loadConfig(envMissingKey)).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('accepts ANTHROPIC_OAUTH_TOKEN as an alternative to ANTHROPIC_API_KEY', () => {
+    const { ANTHROPIC_API_KEY: _unused, ...envWithoutApiKey } = completeEnv;
+
+    expect(() =>
+      loadConfig({
+        ...envWithoutApiKey,
+        ANTHROPIC_OAUTH_TOKEN: 'oat-test',
+      }),
+    ).not.toThrow();
+  });
+
+  it('includes the provider name in the missing-credential error message', () => {
+    const { ANTHROPIC_API_KEY: _unused, ...envMissingKey } = completeEnv;
+    let caught: unknown;
+    try {
+      loadConfig(envMissingKey);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ConfigError);
+    const issue = (caught as ConfigError).issues.find(
+      i => i.envVar === 'ANTHROPIC_API_KEY',
+    );
+    expect(issue?.message).toMatch(/anthropic/);
+  });
+
+  it('fails on missing OPENAI_API_KEY when the provider is openai', () => {
+    expect(() =>
+      loadConfig({
+        ...completeEnv,
+        ANTHROPIC_API_KEY: undefined,
+        LLM_PROVIDER: 'openai',
+      }),
+    ).toThrow(/OPENAI_API_KEY/);
+  });
 });

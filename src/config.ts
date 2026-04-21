@@ -22,6 +22,36 @@ const REQUIRED_ENV_VARS = [
   'TELEGRAM_OWNER_ID',
 ] as const;
 
+/**
+ * Map of LLM provider id → list of env vars whose presence (any one)
+ * satisfies pi-ai's credential lookup. Mirrors pi-ai's `getEnvApiKey`
+ * mapping for the straightforward providers; providers with complex
+ * multi-var auth (google-vertex, amazon-bedrock, github-copilot) are
+ * intentionally omitted so we don't duplicate pi-ai's fallback logic
+ * — for those, pi-ai's own runtime error remains the source of truth.
+ *
+ * The first entry is the "primary" env var we reference in error
+ * messages. Fail-fasting here closes a hole where the bot would pass
+ * startup sanity checks cleanly and then crash on the first user
+ * message with `No API key for provider: <name>`.
+ */
+const PROVIDER_CREDENTIAL_ENV_VARS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN'],
+  'azure-openai-responses': ['AZURE_OPENAI_API_KEY'],
+  cerebras: ['CEREBRAS_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  groq: ['GROQ_API_KEY'],
+  huggingface: ['HF_TOKEN'],
+  mistral: ['MISTRAL_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+  openrouter: ['OPENROUTER_API_KEY'],
+  'vercel-ai-gateway': ['AI_GATEWAY_API_KEY'],
+  xai: ['XAI_API_KEY'],
+  zai: ['ZAI_API_KEY'],
+};
+
 // Schema runs AFTER required-presence checks in loadConfig, so every field
 // here is parsed against a known-non-empty input. Defaults apply to optional
 // fields whose env var is absent.
@@ -111,6 +141,25 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
         continue;
       }
       issues.push({ envVar, message: issue.message });
+    }
+  }
+
+  // Third pass: the configured provider must have its credential env var
+  // present. Without this check the bot would pass every startup sanity
+  // check and then surface `No API key for provider: <name>` on the
+  // first user message — a fail-late pattern that hides misconfiguration
+  // behind a seemingly-healthy deployment.
+  if (result.success) {
+    const provider = result.data.llmProvider;
+    const candidates = PROVIDER_CREDENTIAL_ENV_VARS[provider];
+    if (candidates && !candidates.some(name => !!emptyToUndefined(env[name]))) {
+      const [primary, ...alternatives] = candidates;
+      const hint =
+        alternatives.length > 0 ? ` (or ${alternatives.join(', ')})` : '';
+      issues.push({
+        envVar: primary ?? 'UNKNOWN',
+        message: `No API key for LLM provider '${provider}'. Set ${primary}${hint}.`,
+      });
     }
   }
 
