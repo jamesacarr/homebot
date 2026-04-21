@@ -1,6 +1,6 @@
 ---
 created_at: 2026-04-20T06:51:09Z
-updated_at: 2026-04-20T11:38:01Z
+updated_at: 2026-04-21T00:42:50Z
 status: draft
 ---
 
@@ -378,7 +378,6 @@ homebot/
 ├── pnpm-lock.yaml
 ├── tsconfig.json
 ├── Dockerfile
-├── docker-compose.snippet.yml    # Drop-in service block for the NAS compose
 ├── .env.example
 ├── .gitignore
 ├── vitest.config.ts
@@ -598,8 +597,21 @@ Bot joins the existing `media-net` network in the NAS compose file. No ports
 exposed externally; long polling handles the outbound Telegram connection.
 Volume mount for `/data` holding `homebot.db`.
 
-`docker-compose.snippet.yml` in the repo is what gets pasted into the NAS
-compose file:
+### No separate compose file in the repo
+
+The bot does not ship its own `docker-compose.yml` — it plugs into an
+existing NAS compose stack, so a standalone compose file in the repo would
+be documentation cosplaying as code. Instead, the README's *Deployment*
+section carries the service block as a fenced YAML example, colocated with
+the prose that explains it (env vars, volume layout, healthcheck). One
+source of truth, harder for the block and the prose to drift apart, no
+mystery `.snippet.yml` extension that pretends the file is something it
+isn't.
+
+Service block the README should embed (note: proper `KEY: value` YAML
+mapping syntax — earlier drafts of this block had some `KEY=value` lines
+copied from a `.env` file, which is invalid YAML and would have silently
+broken the service on first pull):
 
 ```yaml
 homebot:
@@ -608,15 +620,16 @@ homebot:
   depends_on:
     - overseerr
   environment:
-    TELEGRAM_BOT_TOKEN: $HOMEBOT_TELEGRAM_TOKEN
+    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
     OVERSEERR_URL: http://overseerr:5055
-    OVERSEERR_API_KEY: $OVERSEERR_API_KEY
-    OWNER_TELEGRAM_USER_ID: $HOMEBOT_OWNER_TELEGRAM_USER_ID
+    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
+    OWNER_TELEGRAM_USER_ID: ${HOMEBOT_OWNER_TELEGRAM_USER_ID}
     LLM_PROVIDER: anthropic
     LLM_MODEL: claude-haiku-4-5
-    LLM_THINKING_LEVEL: off
-    ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
-    TZ: $TIMEZONE
+    LLM_THINKING_LEVEL: "off"
+    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
+    VERSION: ${HOMEBOT_VERSION}           # surfaces in the startup log
+    TZ: ${TIMEZONE}
   healthcheck:
     test: [ "CMD", "curl", "--fail", "http://127.0.0.1:3000/health" ]
     interval: 5s
@@ -629,11 +642,23 @@ homebot:
     - /share/Docker/Homebot/data:/data
 ```
 
-Watchtower will auto-update (existing behaviour).
+Secrets read via `${...}` from the NAS's own `.env` file (same convention
+the rest of the stack already uses) — never committed, never pasted inline.
 
-The health endpoint is bound to `127.0.0.1` inside the container (not exposed
-to the `media-net` network) and runs on port `3000`. Nothing external needs
-reach it; the in-container `curl` healthcheck is the only caller.
+### `:latest` + Watchtower
+
+The block uses `image: ...:latest` and the NAS runs Watchtower, matching
+the stack's existing behaviour. A bad release therefore gets pulled
+automatically; there is no staging gate. Accepted risk for a home bot used
+by a handful of people — if that stops being acceptable, pin to a SHA tag
+and remove the service from Watchtower's watchlist. The README should state
+this explicitly so the operator is not surprised by a silent breakage.
+
+### Health endpoint
+
+Bound to `127.0.0.1` inside the container (not exposed to the `media-net`
+network) on port `3000`. Nothing external reaches it; the in-container
+`curl` healthcheck is the only caller.
 
 ## Dockerfile notes
 
@@ -825,7 +850,7 @@ adapter escapes before sending.
    keyboards, render.
 7. `health.ts` and startup sanity checks in `index.ts`.
 8. End-to-end manual test against a real Telegram bot + a dev Overseerr.
-9. Dockerfile polish + compose snippet + README.
+9. Dockerfile polish + README (service block embedded; no separate compose file).
 10. Deploy to NAS.
 
 Each step ships green tests before moving on.
