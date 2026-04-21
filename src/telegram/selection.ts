@@ -1,12 +1,13 @@
 import type {
   AssistantMessage,
-  Message,
   TextContent,
   ToolCall,
   ToolResultMessage,
   UserMessage,
 } from '@mariozechner/pi-ai';
 
+import { recordTurn } from '../db/conversations.js';
+import type { AppDb } from '../db/index.js';
 import type { Reply } from '../llm/orchestrator.js';
 import type { ToolDispatcher } from '../llm/tools.js';
 import type { Logger } from '../logging.js';
@@ -18,19 +19,25 @@ export interface SelectionInput {
   now: number;
   dispatcher: ToolDispatcher;
   logger: Logger;
+  db: AppDb;
+  maxTurnsInHistory: number;
 }
 
 export interface SelectionOutput {
   replies: Reply[];
   /**
-   * A four-message turn so the LLM has full context if the user follows up:
-   *   user("Selected ...") \u2192 assistant(toolCall request_media)
-   *     \u2192 toolResult(...) \u2192 assistant(text confirmation).
+   * Persistence callback — the caller invokes it only after sends succeed.
+   * Matches the contract `runTextTurn` uses so `bot.ts` can treat both
+   * flows identically: send, then commit on success.
+   *
+   * The persisted turn has four messages:
+   *   user("Selected ...") → assistant(toolCall request_media)
+   *     → toolResult(...) → assistant(text confirmation).
    * The synthetic user message gives the LLM a recognisable marker; the
    * trailing assistant text closes the request/result pair so the next user
    * message starts cleanly.
    */
-  turnToPersist: Message[];
+  commit: () => Promise<void>;
 }
 
 const FAUX_API = 'homebot-selection';
@@ -163,9 +170,16 @@ export async function handleSelection(
   }
 
   const confirmation = syntheticConfirmation(assistantText, input.now);
+  const turnToPersist = [userMsg, assistant, toolResult, confirmation];
 
-  return {
-    replies,
-    turnToPersist: [userMsg, assistant, toolResult, confirmation],
+  const commit = async (): Promise<void> => {
+    await recordTurn(input.db, {
+      maxTurns: input.maxTurnsInHistory,
+      messages: turnToPersist,
+      now: input.now,
+      telegramUserId: input.telegramUserId,
+    });
   };
+
+  return { commit, replies };
 }

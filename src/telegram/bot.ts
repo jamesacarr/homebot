@@ -6,7 +6,6 @@ import {
   encodeRequestAccessCallback,
 } from '../callbacks.js';
 import { createUserLock } from '../concurrency.js';
-import { recordTurn } from '../db/conversations.js';
 import type { AppDb } from '../db/index.js';
 import { findUser } from '../db/users.js';
 import type { Orchestrator } from '../llm/orchestrator.js';
@@ -14,6 +13,7 @@ import type { ToolDispatcher } from '../llm/tools.js';
 import type { Logger } from '../logging.js';
 import type { OverseerrClient } from '../overseerr/client.js';
 import { allowCallback } from './access.js';
+import type { AccessAdapter } from './access-callbacks.js';
 import {
   handleAccessDecision,
   handleAccessRequest,
@@ -180,13 +180,9 @@ export function createBot(deps: CreateBotDeps): Bot {
     // Access decisions are special: only the owner is allowed; the handler
     // itself enforces `from === owner`.
 
-    const adapter = {
-      send: async (
-        toId: number,
-        replies: Parameters<typeof renderReplies>[2],
-      ) => {
-        await renderReplies(asTelegramOutboundApi(ctx.api), toId, replies);
-      },
+    const adapter: AccessAdapter = {
+      send: (toId, replies) =>
+        renderReplies(asTelegramOutboundApi(ctx.api), toId, replies),
     };
 
     if (decoded.kind === 'access_request') {
@@ -219,13 +215,16 @@ export function createBot(deps: CreateBotDeps): Bot {
     if (decoded.kind === 'pick') {
       await userLock.acquire(fromId, async () => {
         const result = await handleSelection({
+          db: deps.db,
           dispatcher: deps.toolDispatcher,
           logger: log,
+          maxTurnsInHistory: deps.maxTurnsInHistory,
           now: now(),
           pick: { mediaType: decoded.mediaType, tmdbId: decoded.tmdbId },
           telegramUserId: fromId,
         });
-        // Send first; bail without persisting if any send fails.
+        // Send first; bail without persisting if any send fails — same
+        // ordering as runTextTurn's commit contract.
         try {
           await renderReplies(
             asTelegramOutboundApi(ctx.api),
@@ -236,14 +235,8 @@ export function createBot(deps: CreateBotDeps): Bot {
           log.error({ err: error, telegramUserId: fromId }, 'render_failed');
           return;
         }
-        // Persist the synthetic turn AFTER successful sends.
         try {
-          await recordTurn(deps.db, {
-            maxTurns: deps.maxTurnsInHistory,
-            messages: result.turnToPersist,
-            now: now(),
-            telegramUserId: fromId,
-          });
+          await result.commit();
         } catch (error) {
           log.error({ err: error, telegramUserId: fromId }, 'persist_failed');
         }
