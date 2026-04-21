@@ -14,6 +14,7 @@ import {
   formatCappedReply,
   hoursUntilUtcMidnight,
 } from './cost-cap.js';
+import type { TypingHeartbeat } from './typing.js';
 
 /**
  * Default budget for the orchestrator's master `AbortSignal` — the per-message
@@ -43,6 +44,17 @@ export interface RunTextTurnInput {
   abortSignal?: AbortSignal;
   /** Override the per-message timeout (default 120s). */
   perMessageTimeoutMs?: number;
+
+  /**
+   * Optional "typing…" heartbeat factory. Invoked immediately before the
+   * orchestrator call; the returned handle's `stop()` runs in a finally
+   * block so the indicator always clears, even if orchestrate throws.
+   *
+   * Caller binds the chat id. Not invoked on cost-cap / access short-circuit
+   * paths — those are sub-millisecond and a typing ping would only add
+   * noise on the Telegram API.
+   */
+  startTyping?: () => TypingHeartbeat;
 }
 
 export interface ReplyResult {
@@ -141,6 +153,12 @@ export async function runTextTurn(
       ? internalSignal
       : AbortSignal.any([internalSignal, input.abortSignal]);
 
+  // Start the typing heartbeat (if wired) BEFORE the orchestrate call so the
+  // indicator appears while the LLM thinks. try/finally ensures `stop()` runs
+  // even on orchestrator errors — otherwise a hung indicator outlives the
+  // turn and confuses the user.
+  const heartbeat = input.startTyping?.();
+
   let output: OrchestratorOutput;
   try {
     output = await input.orchestrate({
@@ -161,6 +179,8 @@ export async function runTextTurn(
         },
       ],
     };
+  } finally {
+    heartbeat?.stop();
   }
 
   // 5. Record cost immediately. The LLM call has been billed; a downstream

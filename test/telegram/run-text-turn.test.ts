@@ -267,6 +267,135 @@ describe('runTextTurn — access control', () => {
   });
 });
 
+describe('runTextTurn — typing indicator', () => {
+  it('starts typing before orchestrate runs and stops it before returning', async () => {
+    // Observable ordering: start → orchestrate → stop. Verified via a
+    // shared log array written to by both a recording startTyping and a
+    // wrapper around the real orchestrator.
+    const events: string[] = [];
+    const innerOrchestrate = makeOrchestrate();
+    const orchestrate: Parameters<typeof runTextTurn>[0]['orchestrate'] =
+      input => {
+        events.push('orchestrate:called');
+        return innerOrchestrate(input);
+      };
+
+    await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'add The Batman',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      startTyping: () => {
+        events.push('typing:start');
+        return {
+          stop: () => {
+            events.push('typing:stop');
+          },
+        };
+      },
+      telegramUserId: APPROVED_USER,
+    });
+
+    expect(events).toEqual([
+      'typing:start',
+      'orchestrate:called',
+      'typing:stop',
+    ]);
+  });
+
+  it('stops typing even when the orchestrator throws', async () => {
+    const events: string[] = [];
+    const orchestrate: Parameters<typeof runTextTurn>[0]['orchestrate'] =
+      () => {
+        events.push('orchestrate:called');
+        return Promise.reject(new Error('llm exploded'));
+      };
+
+    const result = await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'anything',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      startTyping: () => {
+        events.push('typing:start');
+        return {
+          stop: () => {
+            events.push('typing:stop');
+          },
+        };
+      },
+      telegramUserId: APPROVED_USER,
+    });
+
+    expect(events).toEqual([
+      'typing:start',
+      'orchestrate:called',
+      'typing:stop',
+    ]);
+    // The caller still gets an apologetic reply, not a thrown error.
+    expect(result.kind).toBe('replies');
+  });
+
+  it('does not start typing when the cost cap blocks the call', async () => {
+    await db
+      .insertInto('dailyCost')
+      .values({ costUsd: 5.0, dayUtc: '2023-11-14' })
+      .execute();
+
+    const events: string[] = [];
+    const orchestrate: Parameters<typeof runTextTurn>[0]['orchestrate'] = () =>
+      Promise.reject(new Error('should not run'));
+
+    await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'anything',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      startTyping: () => {
+        events.push('typing:start');
+        return {
+          stop: () => {
+            events.push('typing:stop');
+          },
+        };
+      },
+      telegramUserId: APPROVED_USER,
+    });
+
+    // Cost-cap short-circuit is sub-millisecond; a typing ping would just
+    // be noise on the API.
+    expect(events).toEqual([]);
+  });
+
+  it('works without a startTyping dep (backwards compatible)', async () => {
+    const orchestrate = makeOrchestrate();
+    const result = await runTextTurn({
+      capUsd: 1,
+      db,
+      incomingText: 'add The Batman',
+      logger: silentLogger,
+      maxTurnsInHistory: 15,
+      now: 1_700_000_000_000,
+      orchestrate,
+      ownerTelegramUserId: OWNER_ID,
+      telegramUserId: APPROVED_USER,
+    });
+    expect(result.kind).toBe('replies');
+  });
+});
+
 describe('runTextTurn — cost cap', () => {
   it('blocks a non-owner over the cap before calling the orchestrator', async () => {
     await db
