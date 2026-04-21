@@ -1,6 +1,6 @@
 ---
 created_at: 2026-04-20T06:51:09Z
-updated_at: 2026-04-21T00:55:56Z
+updated_at: 2026-04-21T01:05:00Z
 status: draft
 ---
 
@@ -232,11 +232,69 @@ Hard limits, applied at every boundary:
 | Boundary | Timeout | Behaviour on exceed |
 |---|---|---|
 | Single Overseerr HTTP call | 10s | Throw typed `OverseerrTimeoutError`. Orchestrator surfaces as tool-result error. |
-| Single LLM call | 60s | Abort via pi-ai's abort signal. Orchestrator treats as failure, replies apologetically. |
 | Max tool-call rounds per user message | 5 | Safety cap against LLM loops. Reply: "I got stuck thinking — try rephrasing?" |
-| Total per-message processing | 120s | Hard cap via `AbortController`. Reply: "That took too long — try again in a moment." |
+| Total per-message processing | 120s | Hard cap via `AbortController`, propagated to pi-ai and Overseerr via `AbortSignal.any`. Reply: "That took too long — try again in a moment." |
 
 Timeouts are logged at `warn` on expiry.
+
+**No separate per-LLM-call timeout.** An earlier draft had a 60s ceiling on
+each `completeSimple` distinct from the 120s per-message cap. Dropped: if a
+single call hangs 60s, the right move is aborting the whole turn rather
+than retrying the next loop iteration and re-billing the user — the 120s
+master signal already does that. Keeping only one timeout removes a
+duplicate abort pathway that would never improve outcomes.
+
+## Typing indicator
+
+Orchestrator calls take 2–15 seconds in the common case (LLM round-trip +
+tool chain). Without a visible signal the user can't tell whether the bot
+received the message. Telegram's `sendChatAction(chatId, 'typing')` shows
+"homebot is typing…" for up to 5 seconds or until the next outbound message
+arrives.
+
+**Where it lives.** `src/telegram/typing.ts` exports two helpers:
+
+- `sendTypingOnce(api, chatId, logger)` — fire-and-forget single ping.
+  Used at the top of the picker selection callback before `request_media`.
+  The call is sub-second, one ping is enough.
+- `startTypingHeartbeat(api, chatId, logger)` — returns `{ stop(): void }`.
+  Pings immediately, then every 4000ms until `stop()` is called. 4s
+  interval gives a 1s buffer before Telegram's 5s expiry. Wrapped around
+  the `orchestrate()` call in `run-text-turn.ts`.
+
+**Module boundary.** Telegram-only. The orchestrator is unchanged; no
+pi-ai streaming hook. A clock-driven heartbeat is strictly simpler than
+coupling Telegram UX to LLM internals and covers the same perceived
+responsiveness.
+
+**Lifecycle.** The heartbeat stops *before* the first reply is sent.
+Outbound messages dismiss the Telegram indicator themselves, so continuing
+to heartbeat during the picker's 3-photo-plus-keyboard fan-out would just
+spam the API.
+
+**Not wired for:**
+
+- Access-gate drops and cost-cap blocks (sub-millisecond short-circuits).
+- Access-request / approve / deny callbacks (DB-only, no waiting).
+- Group-chat rejection (bot is about to leave the chat).
+
+**Error handling.** `sendChatAction` can fail — user blocked the bot,
+network blip, invalid chat id after a deleted account. Failure is
+cosmetic, so the helpers catch and log `typing_action_failed` at `debug`.
+New canonical log event — add to AGENTS.md:
+
+| Event | Level | Fields |
+|---|---|---|
+| `typing_action_failed` | debug | `telegramUserId`, `err` |
+
+**Testing.** `typing.ts` unit tests use `vi.useFakeTimers()` to assert the
+immediate-first-fire, 4s cadence, and stop-cancels-timer behaviours, plus
+error-swallowing. `run-text-turn.test.ts` gains a spy on the injected
+`api.sendChatAction` to verify the heartbeat is started before
+`orchestrate()` and stopped before the reply path runs.
+
+Shipping this is a v1 follow-up, not a blocker for deploy — the bot works
+without it; it just feels sluggish during LLM calls.
 
 ## Reply shape
 
@@ -698,8 +756,6 @@ caller is `curl` inside the same container. No auth needed.
 
 - Exact popularity threshold for filtering search results — tune empirically.
 - Correct TMDB image size (`w342` is the expected default; confirm).
-- Whether to surface pi-ai's streaming events through to the Telegram "typing…"
-  indicator during LLM calls. Probably yes, but low priority.
 
 ## Step 5 — LLM orchestrator: implementation notes
 
