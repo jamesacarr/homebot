@@ -1,40 +1,169 @@
 # homebot
 
-A small Telegram bot that accepts natural-language media requests and forwards
-them to a home [Overseerr](https://overseerr.dev/) instance.
+A small Telegram bot that takes natural-language media requests and forwards
+them to a home [Overseerr](https://overseerr.dev/) instance. Runs as a
+container alongside the existing media-services stack on a NAS.
 
-> "can you add The Bear to the server?" → *Requested The Bear (2022). ✓*
+> *User:* can you add The Bear to the server?
+> *Bot:* Sure! Requested **The Bear (2022)** — full series. ✓
+
+Under the hood: grammY for Telegram, [`@mariozechner/pi-ai`](https://www.npmjs.com/package/@mariozechner/pi-ai)
+for LLM tool-calling (provider-agnostic), and a three-tool surface
+(`search_media`, `get_media_details`, `request_media`) — that bounded tool
+set is the load-bearing security property, so untrusted Overseerr/TMDB
+content can't be coerced into anything dangerous. See [`plan.md`](./plan.md)
+for the full design and [`AGENTS.md`](./AGENTS.md) for working conventions.
 
 ## Status
 
-Early development. See [`plan.md`](./plan.md) for the full design and
-[`AGENTS.md`](./AGENTS.md) for working conventions.
+Feature-complete for v1. Not yet deployed.
 
-## Requirements
+## Prerequisites
 
-- Node.js 24+
-- pnpm
-- Docker (for deployment)
-- A Telegram bot token from [BotFather](https://t.me/BotFather)
-- A running Overseerr instance with an API key
+- **Telegram bot token** from [@BotFather](https://t.me/BotFather). Keep the
+  value; you'll need it for `TELEGRAM_BOT_TOKEN`.
+- **Overseerr URL and API key** — API key lives under *Settings → General*
+  in the Overseerr admin UI.
+- **LLM provider API key** — Anthropic, OpenAI, Groq, etc. pi-ai resolves
+  the key by provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …).
+- **Your numeric Telegram user ID** — any bot like [@userinfobot](https://t.me/userinfobot)
+  will tell you. This is `OWNER_TELEGRAM_USER_ID`; owner bypasses the daily
+  cost cap and is the only user who can approve access requests.
+
+### One-time Telegram setup
+
+- **Privacy mode on.** In BotFather, `/mybots` → pick your bot → *Bot
+  Settings* → *Group Privacy* → *Turn on*. The bot is DM-only; privacy mode
+  stops Telegram from delivering group messages in the first place. The bot
+  also leaves any group it's added to as a belt-and-braces check.
+- **Owner must DM the bot before first startup.** One of the startup sanity
+  checks is `getChat(OWNER_TELEGRAM_USER_ID)`, which fails until Telegram
+  knows the owner-↔-bot chat exists. Send the bot any message (e.g. `/start`)
+  once from your own Telegram account before deploying. The sanity-check
+  error hints at this explicitly, but it's easier to get right the first
+  time.
+
+## Environment variables
+
+Mirror of [`src/config.ts`](./src/config.ts) and [`.env.example`](./.env.example).
+
+### Required
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | From BotFather. |
+| `OVERSEERR_URL` | e.g. `http://overseerr:5055` (inside the compose network). |
+| `OVERSEERR_API_KEY` | From Overseerr → *Settings → General*. |
+| `OWNER_TELEGRAM_USER_ID` | Your numeric Telegram user ID. |
+| `LLM_PROVIDER` | pi-ai provider key: `anthropic`, `openai`, `groq`, … |
+| `LLM_MODEL` | pi-ai model id, e.g. `claude-haiku-4-5`. |
+| `<PROVIDER>_API_KEY` | Matches `LLM_PROVIDER`, e.g. `ANTHROPIC_API_KEY`. |
+
+### Optional (with defaults)
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLM_THINKING_LEVEL` | `off` | `off \| minimal \| low \| medium \| high \| xhigh`. Ignored on non-reasoning models. |
+| `LOG_LEVEL` | `info` | `debug \| info \| warn \| error`. |
+| `DB_PATH` | `/data/homebot.db` | SQLite file location; should live on a mounted volume. |
+| `DAILY_COST_CAP_USD` | `1.00` | Refuse new LLM calls once this is exceeded (UTC-day bucket). Owner bypasses the cap. |
+| `MAX_TURNS_IN_HISTORY` | `15` | Per-user conversation-turn cap; older turns are trimmed on insert. |
+
+### Injected by CI
+
+| Variable | Description |
+|---|---|
+| `VERSION` | Baked into the image at build time from the commit short SHA. Surfaces in the startup log. Override locally if you're iterating outside Docker. |
+
+## Deployment
+
+The bot ships as a Docker image from GHCR (`ghcr.io/jamesacarr/homebot:latest`)
+and plugs into an existing NAS compose stack on the `media-net` network.
+There's no separate `docker-compose.yml` in this repo by design — the
+service block below is the source of truth; copy it into your stack's
+compose file.
+
+```yaml
+homebot:
+  image: ghcr.io/jamesacarr/homebot:latest
+  container_name: homebot
+  depends_on:
+    - overseerr
+  environment:
+    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
+    OVERSEERR_URL: http://overseerr:5055
+    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
+    OWNER_TELEGRAM_USER_ID: ${HOMEBOT_OWNER_TELEGRAM_USER_ID}
+    LLM_PROVIDER: anthropic
+    LLM_MODEL: claude-haiku-4-5
+    LLM_THINKING_LEVEL: "off"
+    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
+    TZ: ${TIMEZONE}
+  healthcheck:
+    test: [ "CMD", "curl", "--fail", "http://127.0.0.1:3000/health" ]
+    interval: 5s
+    retries: 10
+  networks:
+    - media-net
+  restart: always
+  volumes:
+    - /etc/localtime:/etc/localtime
+    - /share/Docker/Homebot/data:/data
+```
+
+Secrets come from the NAS's own `.env` file via `${HOMEBOT_*}` substitutions
+— same convention as the rest of the stack. Nothing secret is ever pasted
+inline, committed, or rebuilt into the image.
+
+### Volume layout
+
+- `/share/Docker/Homebot/data` on the host ↔ `/data` in the container.
+  Holds `homebot.db` (SQLite). The default `DB_PATH` assumes this mount,
+  so you don't need to set it unless you're relocating the file.
+
+### Health endpoint
+
+A tiny `node:http` server runs inside the container on `127.0.0.1:3000`,
+exposing `GET /health`. Bound to loopback; not reachable from `media-net`
+— the in-container `curl` healthcheck above is the only caller. Returns
+200 when grammY is polling **and** the DB answers `SELECT 1`; otherwise
+503 with a JSON body naming the failed check.
+
+### `:latest` + Watchtower
+
+The tag is `:latest` and the stack runs Watchtower, matching every other
+service on the NAS. Consequence: a bad release pulls automatically, there
+is no staging gate, and you'll only notice via the healthcheck flapping or
+users complaining. That's an accepted trade-off for a home bot used by a
+handful of people. If that stops being acceptable, pin to a `sha-<short>`
+tag (CI publishes both) and remove the container from Watchtower's
+watchlist.
 
 ## Local development
+
+Node.js 24+ (see [`.tool-versions`](./.tool-versions)) and pnpm 10 are
+required.
 
 ```bash
 pnpm install
 cp .env.example .env
-# Fill in the required values in .env
+# Fill in TELEGRAM_BOT_TOKEN, OVERSEERR_URL, OVERSEERR_API_KEY,
+# OWNER_TELEGRAM_USER_ID, LLM_PROVIDER, LLM_MODEL, and the matching
+# <PROVIDER>_API_KEY. Point OVERSEERR_URL and DB_PATH at whatever is
+# reachable from your dev machine.
 
-pnpm dev        # run in watch mode
-pnpm test       # run tests
-pnpm typecheck  # type check only
-pnpm lint       # lint + format check
+pnpm dev          # tsx watch src/index.ts
+pnpm test         # vitest run
+pnpm test:watch   # vitest
+pnpm typecheck    # tsc --noEmit
+pnpm check        # biome check (read-only; what CI runs)
+pnpm lint         # biome check --write
+pnpm build        # tsc -p tsconfig.build.json → dist/
 ```
 
-## Deployment
-
-The bot is designed to run as a Docker container alongside Overseerr in a
-compose stack. See `plan.md` → *Deployment* for the compose snippet.
+Commits use [Conventional Commits](https://www.conventionalcommits.org/),
+enforced via commitlint + Husky. `pnpm check`, `pnpm typecheck`, and
+`pnpm test` all run in CI on every push.
 
 ## License
 
