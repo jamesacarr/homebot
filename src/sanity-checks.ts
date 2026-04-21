@@ -102,8 +102,9 @@ function describeError(error: unknown): string {
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error) {
-      if (current.message) {
-        parts.push(current.message);
+      const label = labelError(current);
+      if (label) {
+        parts.push(label);
       }
       const next =
         (current as { cause?: unknown }).cause ??
@@ -115,4 +116,25 @@ function describeError(error: unknown): string {
     }
   }
   return parts.join(' → ');
+}
+
+/**
+ * Build a human label for a single Error. Prefers `.message`; falls back
+ * to system-error `.code` / `.errno` when message is empty, and appends
+ * `.code` if it's present but not already in the message. This is what
+ * lets us see `ENOTFOUND` on a DNS failure that otherwise surfaces as
+ * just "fetch failed".
+ */
+function labelError(error: Error): string {
+  const code = (error as { code?: unknown }).code;
+  const errno = (error as { errno?: unknown }).errno;
+  const codeStr = typeof code === 'string' && code ? code : null;
+  const errnoStr = typeof errno === 'number' ? `errno ${errno}` : null;
+  if (error.message) {
+    if (codeStr && !error.message.includes(codeStr)) {
+      return `${error.message} [${codeStr}]`;
+    }
+    return error.message;
+  }
+  return codeStr ?? errnoStr ?? '';
 }

@@ -96,4 +96,44 @@ describe('runSanityChecks', () => {
       );
     });
   });
+
+  it('surfaces the error code when the cause message is empty', async () => {
+    const db = await createTestDb();
+    const overseerr = createFakeOverseerr();
+    // Some system errors (DNS, connection resets) leave .message empty
+    // and only populate .code / .errno. Without surfacing them, the chain
+    // ends in a blank trailing "reason:" and the operator is none the
+    // wiser.
+    const bareSystemError = Object.assign(new Error(''), {
+      code: 'ENOTFOUND',
+      errno: -3008,
+    });
+    const fetchError = new Error('fetch failed', { cause: bareSystemError });
+    const bot = asBot({
+      getChat: () => Promise.resolve({}),
+      getMe: () =>
+        Promise.reject(
+          new HttpError("Network request for 'getMe' failed!", fetchError),
+        ),
+    });
+
+    await expect(
+      runSanityChecks({
+        bot,
+        db,
+        logger: silentLogger,
+        overseerr,
+        ownerTelegramUserId: 42,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      if (!(error instanceof SanityCheckError)) {
+        return false;
+      }
+      const issue = error.issues.find(i => i.check === 'telegram_get_me');
+      if (!issue) {
+        return false;
+      }
+      return issue.message.includes('ENOTFOUND');
+    });
+  });
 });
