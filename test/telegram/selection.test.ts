@@ -55,6 +55,37 @@ describe('handleSelection', () => {
     ]);
   });
 
+  it('still confirms without a photo reply when the requested title has no posterUrl', async () => {
+    const overseerr = createFakeOverseerr({
+      detailsByTmdbId: new Map([
+        [414906, { ...movieDetails, posterUrl: null }],
+      ]),
+    });
+    const dispatcher = createToolDispatcher({
+      logger: silentLogger,
+      overseerr,
+    });
+
+    const result = await handleSelection({
+      dispatcher,
+      logger: silentLogger,
+      now: 1_700_000_000_000,
+      pick: { mediaType: 'movie', tmdbId: 414906 },
+      telegramUserId: 42,
+    });
+
+    expect(overseerr.createCalls).toEqual([
+      { mediaType: 'movie', tmdbId: 414906 },
+    ]);
+    // Text confirmation only — no dangling empty-poster send.
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies[0]?.kind).toBe('text');
+    if (result.replies[0]?.kind !== 'text') {
+      throw new Error('unreachable');
+    }
+    expect(result.replies[0].text).toMatch(/Requested/);
+  });
+
   it('reports an already-available title without a request and without a poster', async () => {
     const overseerr = createFakeOverseerr({
       detailsByTmdbId: new Map([
