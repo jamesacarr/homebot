@@ -1,4 +1,5 @@
 import type { Bot } from 'grammy';
+import { HttpError } from 'grammy';
 
 import type { AppDb } from './db/index.js';
 import type { Logger } from './logging.js';
@@ -89,11 +90,19 @@ async function runCheck(
 
 /**
  * Flatten an error and every unwrappable cause into a single `a → b → c`
- * line. Walks both the standard `Error.cause` and grammY's non-standard
- * `HttpError.error` (which predates `cause` being widely available and
- * never got retrofitted). Without this, a Telegram outage surfaces as the
- * generic "Network request for 'getMe' failed!" with the real reason
- * (ENOTFOUND, ETIMEDOUT, TLS, ...) discarded one level down.
+ * line.
+ *
+ * grammY's `HttpError` gets special handling: its `.message` is the
+ * token-safe text grammY deliberately crafted (per `sensitiveLogs: false`
+ * default), and its `.error` property holds the raw fetch rejection
+ * whose message embeds the `/bot<TOKEN>/` URL. We surface only the
+ * structured system code (`.code` / `.errno`) from the wrapped error,
+ * never its message, and do not traverse further. See grammY's
+ * ApiClientOptions docs on `sensitiveLogs` for the rationale.
+ *
+ * For other errors we walk both the standard `Error.cause` and any
+ * `.error` fallback (some libraries predate `cause` and never migrated),
+ * since no bot token is embedded in those chains.
  */
 function describeError(error: unknown): string {
   const parts: string[] = [];
@@ -101,15 +110,21 @@ function describeError(error: unknown): string {
   let current: unknown = error;
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
-    if (current instanceof Error) {
+    if (current instanceof HttpError) {
+      parts.push(current.message);
+      const code = extractSystemCode(current.error);
+      if (code) {
+        parts.push(`[${code}]`);
+      }
+      current = undefined;
+    } else if (current instanceof Error) {
       const label = labelError(current);
       if (label) {
         parts.push(label);
       }
-      const next =
+      current =
         (current as { cause?: unknown }).cause ??
         (current as { error?: unknown }).error;
-      current = next;
     } else {
       parts.push(String(current));
       current = undefined;
@@ -121,9 +136,7 @@ function describeError(error: unknown): string {
 /**
  * Build a human label for a single Error. Prefers `.message`; falls back
  * to system-error `.code` / `.errno` when message is empty, and appends
- * `.code` if it's present but not already in the message. This is what
- * lets us see `ENOTFOUND` on a DNS failure that otherwise surfaces as
- * just "fetch failed".
+ * `.code` if it's present but not already in the message.
  */
 function labelError(error: Error): string {
   const code = (error as { code?: unknown }).code;
@@ -137,4 +150,27 @@ function labelError(error: Error): string {
     return error.message;
   }
   return codeStr ?? errnoStr ?? '';
+}
+
+/**
+ * Walk up to a few cause levels looking for a string `.code` (e.g.
+ * `ENOTFOUND`, `ETIMEDOUT`). Never reads `.message` — that's what may
+ * contain the bot token URL when the wrapped error is a fetch rejection.
+ */
+function extractSystemCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth++) {
+    if (!(current instanceof Error)) {
+      return null;
+    }
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && code) {
+      return code;
+    }
+    current = (current as { cause?: unknown }).cause;
+    if (current === undefined || current === null) {
+      return null;
+    }
+  }
+  return null;
 }

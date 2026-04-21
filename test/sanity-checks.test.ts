@@ -20,18 +20,27 @@ function asBot(api: FakeBotApi): Bot {
   return { api } as unknown as Bot;
 }
 
+/**
+ * Approximate the shape grammY hands us on a real network failure:
+ * `HttpError.message` is the safe, token-free text grammY crafted
+ * (`sensitiveLogs: false` is the default). `HttpError.error` holds the
+ * raw fetch rejection, whose `.message` embeds the full request URL —
+ * including the `/bot<TOKEN>/` path segment. `.code` on the fetch error
+ * (or its cause, depending on node-fetch vs native fetch) carries the
+ * system-level reason (`ENOTFOUND`, `ETIMEDOUT`, ...).
+ */
 function grammyNetworkFailure(method: 'getMe' | 'getChat'): HttpError {
-  // Mirror the shape node's fetch produces: a generic "fetch failed" with
-  // the low-level reason (DNS, connection refused, etc.) hanging off
-  // `.cause`. grammY then wraps the fetch rejection in an HttpError whose
-  // `.error` property is the original fetch error.
-  const dnsError = new Error('getaddrinfo ENOTFOUND api.telegram.org');
-  const fetchError = new Error('fetch failed', { cause: dnsError });
+  const fetchError = Object.assign(
+    new Error(
+      `request to https://api.telegram.org/bot123:SECRET/${method} failed, reason: `,
+    ),
+    { code: 'ENOTFOUND' },
+  );
   return new HttpError(`Network request for '${method}' failed!`, fetchError);
 }
 
 describe('runSanityChecks', () => {
-  it('surfaces the underlying fetch cause when grammY reports a network failure on getMe', async () => {
+  it('surfaces the system error code from a grammY HttpError without leaking the wrapped URL', async () => {
     const db = await createTestDb();
     const overseerr = createFakeOverseerr();
     const bot = asBot({
@@ -55,15 +64,19 @@ describe('runSanityChecks', () => {
       if (!issue) {
         return false;
       }
+      // Outer grammY message is safe; system code is the useful diagnostic.
+      // The wrapped fetch error's `.message` embeds the bot token URL and
+      // must never appear.
       return (
         issue.message.includes("Network request for 'getMe' failed!") &&
-        issue.message.includes('fetch failed') &&
-        issue.message.includes('getaddrinfo ENOTFOUND api.telegram.org')
+        issue.message.includes('ENOTFOUND') &&
+        !issue.message.includes('SECRET') &&
+        !issue.message.includes('bot123:')
       );
     });
   });
 
-  it('preserves the underlying network cause alongside the owner-chat hint', async () => {
+  it('preserves the owner-chat hint alongside the system error code without leaking the wrapped URL', async () => {
     const db = await createTestDb();
     const overseerr = createFakeOverseerr();
     const bot = asBot({
@@ -92,29 +105,29 @@ describe('runSanityChecks', () => {
       return (
         /DMed the bot/.test(issue.message) &&
         issue.message.includes("Network request for 'getChat' failed!") &&
-        issue.message.includes('getaddrinfo ENOTFOUND api.telegram.org')
+        issue.message.includes('ENOTFOUND') &&
+        !issue.message.includes('SECRET') &&
+        !issue.message.includes('bot123:')
       );
     });
   });
 
-  it('surfaces the error code when the cause message is empty', async () => {
+  it('walks the full cause chain for non-grammY errors', async () => {
     const db = await createTestDb();
+    // Overseerr errors are not grammY HttpErrors, so the full chain is
+    // safe to surface — no secrets are embedded in Overseerr error
+    // messages. Confirms the grammY-specific redaction path doesn't
+    // accidentally gate the generic traversal.
     const overseerr = createFakeOverseerr();
-    // Some system errors (DNS, connection resets) leave .message empty
-    // and only populate .code / .errno. Without surfacing them, the chain
-    // ends in a blank trailing "reason:" and the operator is none the
-    // wiser.
-    const bareSystemError = Object.assign(new Error(''), {
-      code: 'ENOTFOUND',
-      errno: -3008,
-    });
-    const fetchError = new Error('fetch failed', { cause: bareSystemError });
+    overseerr.getStatus = () =>
+      Promise.reject(
+        new Error('overseerr unreachable', {
+          cause: new Error('connect ECONNREFUSED 10.0.0.5:5055'),
+        }),
+      );
     const bot = asBot({
       getChat: () => Promise.resolve({}),
-      getMe: () =>
-        Promise.reject(
-          new HttpError("Network request for 'getMe' failed!", fetchError),
-        ),
+      getMe: () => Promise.resolve({ id: 1, is_bot: true }),
     });
 
     await expect(
@@ -129,11 +142,14 @@ describe('runSanityChecks', () => {
       if (!(error instanceof SanityCheckError)) {
         return false;
       }
-      const issue = error.issues.find(i => i.check === 'telegram_get_me');
+      const issue = error.issues.find(i => i.check === 'overseerr_status');
       if (!issue) {
         return false;
       }
-      return issue.message.includes('ENOTFOUND');
+      return (
+        issue.message.includes('overseerr unreachable') &&
+        issue.message.includes('ECONNREFUSED')
+      );
     });
   });
 });
