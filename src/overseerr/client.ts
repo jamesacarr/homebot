@@ -437,10 +437,17 @@ export function createOverseerrClient(
     },
 
     async search(query, callOptions) {
-      const params = new URLSearchParams({ query });
-      const data = (await request(`/search?${params.toString()}`, {
-        ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
-      })) as { results?: unknown };
+      // Overseerr's query validator rejects `+` as a space encoding and
+      // requires percent-escapes. `URLSearchParams.toString()` produces
+      // `+` per application/x-www-form-urlencoded, which is valid for
+      // form bodies but not for Overseerr's strict URL parser. Use
+      // `encodeURIComponent` so spaces become `%20`.
+      const data = (await request(
+        `/search?query=${encodeURIComponent(query)}`,
+        {
+          ...(callOptions?.signal ? { signal: callOptions.signal } : {}),
+        },
+      )) as { results?: unknown };
       if (!Array.isArray(data.results)) {
         return [];
       }

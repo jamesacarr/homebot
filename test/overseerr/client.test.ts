@@ -206,8 +206,28 @@ describe('OverseerrClient.search', () => {
         year: '2005',
       },
     ]);
+    // Overseerr's query validator rejects `+` as a space encoding and
+    // demands percent-escapes. `URLSearchParams` produces `+` for space,
+    // so the search client must use `encodeURIComponent` instead.
     expect(calls[0]?.url).toBe(
-      'http://overseerr:5055/api/v1/search?query=The+Batman',
+      'http://overseerr:5055/api/v1/search?query=The%20Batman',
+    );
+  });
+
+  it('percent-encodes reserved characters in the query so Overseerr accepts it', async () => {
+    const { calls, fetch } = makeFetchFake(
+      () => new Response(JSON.stringify(searchResponse), { status: 200 }),
+    );
+    const client = createOverseerrClient({
+      apiKey: 'secret',
+      baseUrl: 'http://overseerr:5055',
+      fetch,
+    });
+
+    await client.search('Rock & Roll?');
+
+    expect(calls[0]?.url).toBe(
+      'http://overseerr:5055/api/v1/search?query=Rock%20%26%20Roll%3F',
     );
   });
 });
