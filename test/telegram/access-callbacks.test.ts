@@ -178,7 +178,7 @@ describe('handleAccessDecision', () => {
   });
 
   it('rejects a decision tap from anyone other than the owner without writing or DM-ing', async () => {
-    // Defensive belt-and-braces per plan.md — even though the message is
+    // Defensive belt-and-braces — even though the message is
     // DM'd to owner only, an attacker who learned the callback_data format
     // must not be able to approve themselves.
     const { adapter, sent } = makeAdapter();

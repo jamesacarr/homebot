@@ -48,7 +48,7 @@ describe('callback encode/decode round-trips', () => {
     });
   });
 
-  it('encodes the access-request button as the literal string per plan.md', () => {
+  it('encodes the access-request button as the literal string', () => {
     expect(encodeRequestAccessCallback()).toBe('access_request');
     expect(decodeCallbackData('access_request')).toEqual({
       kind: 'access_request',

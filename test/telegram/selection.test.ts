@@ -208,7 +208,7 @@ describe('handleSelection', () => {
       telegramUserId: 42,
     });
 
-    // Pre-commit: nothing persisted yet (plan.md: send first, persist on success).
+    // Pre-commit: nothing persisted yet (send first, persist on success).
     expect(await turnCount()).toBe(0);
 
     await result.commit();

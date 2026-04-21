@@ -29,7 +29,7 @@ export interface SanityCheckDeps {
 }
 
 /**
- * Per plan.md, fail-fast on any of:
+ * Fail-fast on any of:
  *  1. DB writable + migrations clean (assumed already run by caller — we
  *     just probe with a SELECT 1 here).
  *  2. Overseerr `/api/v1/status` answers within 5s.

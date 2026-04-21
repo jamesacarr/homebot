@@ -211,7 +211,7 @@ describe('renderReplies', () => {
   });
 
   it('propagates a send failure so the caller can skip turn persistence', async () => {
-    // Per plan.md: if any send fails, the turn is NOT persisted. Our contract
+    // If any send fails, the turn is NOT persisted. Our contract
     // with the caller is "throw on first failure".
     const boom = new Error('network down');
     const api: TelegramOutboundApi = {

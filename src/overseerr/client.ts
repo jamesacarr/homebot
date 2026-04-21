@@ -5,7 +5,7 @@ import {
   OverseerrUnauthorizedError,
 } from './errors.js';
 
-// 10s default per plan.md — Overseerr usually answers in <1s.
+// 10s default — Overseerr usually answers in <1s.
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export type MediaStatus =
@@ -25,7 +25,7 @@ const MEDIA_STATUS_BY_CODE: Record<number, MediaStatus> = {
   6: 'DELETED',
 };
 
-// See plan.md — w342 is the chosen poster size for Telegram inline cards.
+// w342 is the chosen poster size for Telegram inline cards.
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
 
 export interface OverseerrStatus {
@@ -402,7 +402,7 @@ export function createOverseerrClient(
 
   return {
     async createRequest(input, callOptions) {
-      // Default TV requests to the full series per plan.md.
+      // Default TV requests to the full series.
       const body: Record<string, unknown> = {
         mediaId: input.tmdbId,
         mediaType: input.mediaType,

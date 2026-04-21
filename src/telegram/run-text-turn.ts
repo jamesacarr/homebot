@@ -18,7 +18,7 @@ import type { TypingHeartbeat } from './typing.js';
 
 /**
  * Default budget for the orchestrator's master `AbortSignal` — the per-message
- * ceiling from plan.md. The caller can override for tests.
+ * ceiling. The caller can override for tests.
  */
 const DEFAULT_PER_MESSAGE_TIMEOUT_MS = 120_000;
 
@@ -62,7 +62,7 @@ export interface ReplyResult {
   replies: Reply[];
   /**
    * Persistence callback. Caller invokes it ONLY after all sends in `replies`
-   * succeed (plan.md: send first, persist on success). Absent on paths where
+   * succeed (send first, persist on success). Absent on paths where
    * there is no orchestrator turn to persist (cost-cap rejection, etc.).
    */
   commit?: () => Promise<void>;
@@ -80,7 +80,7 @@ export type RunTextTurnResult =
  *
  * Returns replies for the adapter to send, plus an optional `commit()` the
  * caller invokes after sends succeed to persist the turn. This split enforces
- * plan.md's persistence ordering: "send first, persist on success" — if sends
+ * persistence ordering: "send first, persist on success" — if sends
  * fail the caller skips commit() and the user's retry starts cleanly.
  *
  * Cost recording happens BEFORE we return: the LLM call has already been

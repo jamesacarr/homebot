@@ -2,7 +2,7 @@
  * System prompt for the LLM. Defines the bot's user-facing behaviour.
  * Separate from AGENTS.md, which is for humans working on this repo.
  *
- * Expected to iterate — this file is a starting point per plan.md.
+ * Expected to iterate — this file is a starting point.
  *
  * Keep in mind the load-bearing security boundary: the LLM has three tools
  * (`search_media`, `get_media_details`, `request_media`). Tool-result content

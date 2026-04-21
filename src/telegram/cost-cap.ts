@@ -1,6 +1,6 @@
 /**
  * Cost-cap pre-check for the LLM call. Lives outside the orchestrator on
- * purpose (plan.md): the orchestrator stays pure LLM logic, the caller owns
+ * purpose: the orchestrator stays pure LLM logic, the caller owns
  * DB reads, the cost cap, and the owner-bypass exemption.
  */
 
@@ -45,7 +45,7 @@ export function hoursUntilUtcMidnight(nowMs: number): number {
 
 /**
  * User-facing capped message. Includes a concrete hours-remaining figure
- * rather than a vague "try tomorrow" \u2014 plan.md is explicit about wanting a
+ * rather than a vague "try tomorrow" \u2014 we explicitly want a
  * timezone-unambiguous reset time.
  */
 export function formatCappedReply(hoursRemaining: number): string {

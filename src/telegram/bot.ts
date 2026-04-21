@@ -121,7 +121,7 @@ export function createBot(deps: CreateBotDeps): Bot {
       }
 
       // kind === 'replies'. Send first; only persist (commit) if every send
-      // succeeded — plan.md's preferred ordering. A persist that races ahead
+      // succeeded — preferred ordering. A persist that races ahead
       // of a failed send leaves the LLM's history out of sync with what the
       // user actually saw on their retry.
       try {

@@ -144,7 +144,7 @@ describe('runTextTurn — happy path', () => {
     }
     expect(result.replies).toHaveLength(2); // text + poster
 
-    // Pre-commit: turn is NOT persisted yet — plan.md says send first,
+    // Pre-commit: turn is NOT persisted yet — send first,
     // persist only if sends succeed.
     expect(await countTurns(db, APPROVED_USER)).toBe(0);
     expect(result.commit).toBeDefined();

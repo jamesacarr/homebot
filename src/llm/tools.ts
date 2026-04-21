@@ -103,7 +103,7 @@ export interface ToolDispatcher {
 export interface CreateToolDispatcherOptions {
   overseerr: OverseerrClient;
   logger: Logger;
-  /** Defaults to 3 — see plan.md. */
+  /** Defaults to 3 candidates after popularity filtering. */
   maxSearchResults?: number;
 }
 
@@ -377,7 +377,7 @@ export function createToolDispatcher(
 
     // Idempotency: if Overseerr already knows this title is available or in
     // flight, don't re-submit. Treat PARTIALLY_AVAILABLE the same as
-    // AVAILABLE (plan.md: home bot doesn't do per-season granularity).
+    // AVAILABLE. No per-season granularity — always request the full series.
     const duplicateStatus: RequestMediaStatus | null =
       details.status === 'AVAILABLE' || details.status === 'PARTIALLY_AVAILABLE'
         ? 'already_available'

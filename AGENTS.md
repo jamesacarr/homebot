@@ -4,15 +4,14 @@ Guidance for humans and coding agents working on this repo. The bot's runtime
 LLM has a **separate** system prompt (`src/llm/prompt.ts`) which defines the
 bot's user-facing behaviour; that is unrelated to this file.
 
-See [`plan.md`](./plan.md) for the full design and decision log. This file is
-conventions only.
+This file covers architecture and working conventions. Design rationale for
+individual decisions lives in the relevant commit messages.
 
 ## What this project is
 
 A small Telegram bot that accepts natural-language media requests and forwards
 them to a home Overseerr instance. Runs as a container on the home NAS. Used
-by a handful of family/friends. Low traffic (~10 messages/week). See `plan.md`
-for architecture.
+by a handful of family/friends. Low traffic (~10 messages/week).
 
 ## Load-bearing security boundary — READ THIS
 
@@ -43,7 +42,7 @@ The orchestrator is the core, wrapped in adapters.
 - **`src/llm/`** — orchestrator, system prompt, tool definitions. Imports pi-ai.
   Must not import grammY or kysely directly — depends on interfaces only.
 - **`src/overseerr/`** — HTTP client with built-in timeouts and typed errors.
-  Owns TMDB poster URL construction (see `plan.md`).
+  Owns TMDB poster URL construction.
 - **`src/db/`** — kysely + better-sqlite3. Migrations, query helpers.
 - **`src/config.ts`, `src/logging.ts`, `src/concurrency.ts`, `src/health.ts`** — 
   infrastructure shared across layers.
@@ -210,8 +209,9 @@ the message. Both must pass before the commit lands.
 
 ## When in doubt
 
-- Read `plan.md` end-to-end. It captures the *why* for most decisions.
-- If a plan decision feels wrong once you're implementing, push back with
-  reasoning rather than quietly diverging. The plan is editable.
+- Check git log for decision rationale. Each architectural choice was
+  landed with a commit message that explains the *why*.
+- If a documented convention feels wrong once you're implementing, push back
+  with reasoning rather than quietly diverging. This file is editable.
 - If you're unsure whether a change crosses a module boundary, it probably
   does.

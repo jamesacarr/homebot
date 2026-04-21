@@ -19,7 +19,7 @@ import type { OverseerrClient, SearchCandidate } from '../overseerr/client.js';
 import type { ToolDispatcher, ToolDispatchResult } from './tools.js';
 import { createToolDispatcher } from './tools.js';
 
-/** Default safety cap on LLM loop iterations per user message. See plan.md. */
+/** Default safety cap on LLM loop iterations per user message. */
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 
 /**

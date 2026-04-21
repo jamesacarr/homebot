@@ -104,7 +104,7 @@ export interface InlineKeyboardMarkup {
 
 /**
  * Send each `Reply` in order. If any send rejects, the promise rejects and
- * the caller is expected NOT to persist the turn (plan.md). Sends are
+ * the caller is expected NOT to persist the turn. Sends are
  * sequential on purpose — Telegram respects message ordering when calls are
  * awaited; parallel `send*` calls would arrive in arbitrary order.
  */

@@ -11,8 +11,8 @@ Under the hood: grammY for Telegram, [`@mariozechner/pi-ai`](https://www.npmjs.c
 for LLM tool-calling (provider-agnostic), and a three-tool surface
 (`search_media`, `get_media_details`, `request_media`) — that bounded tool
 set is the load-bearing security property, so untrusted Overseerr/TMDB
-content can't be coerced into anything dangerous. See [`plan.md`](./plan.md)
-for the full design and [`AGENTS.md`](./AGENTS.md) for working conventions.
+content can't be coerced into anything dangerous. See [`AGENTS.md`](./AGENTS.md)
+for architecture and working conventions.
 
 ## Status
 

@@ -35,7 +35,7 @@ export interface HandleAccessRequestInput {
  * the owner on every stale tap would be a spam vector (a denied user who
  * still has the button in their scroll history could chain taps). The
  * status-gated silent-drop on text messages + one-shot owner notification
- * here are sufficient per plan.md.
+ * here are sufficient.
  */
 export async function handleAccessRequest(
   input: HandleAccessRequestInput,
@@ -122,7 +122,7 @@ export type AccessDecisionResult =
 /**
  * Handle the owner tapping ✓ Approve / ✗ Deny on a pending access request.
  *
- * Defensive `from === owner` check per plan.md: even though the prompt is
+ * Defensive `from === owner` check: even though the prompt is
  * DM'd to the owner only, an attacker who learned the callback_data format
  * must not be able to self-approve.
  *
