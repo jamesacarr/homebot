@@ -91,7 +91,7 @@ inline.
 |---|---|---|
 | `startup` | info | `version`, `llmModel`, `llmProvider` |
 | `shutdown` | info | `reason` |
-| `health_check_failed` | warn | `check` (which criterion failed) |
+| `health_check_failed` | warn | `check` (which criterion failed). error-level with `err` on handler exception |
 | `llm_call` | info | `telegramUserId`, `turnIndex`, `model` |
 | `llm_call_failed` | error | `telegramUserId`, `err` |
 | `llm_tool_round_cap_hit` | warn | `telegramUserId`, `rounds` |
@@ -101,11 +101,17 @@ inline.
 | `request_submitted` | info | `telegramUserId`, `tmdbId`, `title`, `mediaType` |
 | `request_duplicate` | info | `telegramUserId`, `tmdbId`, `status` |
 | `access_request_received` | info | `telegramUserId`, `telegramUsername` |
+| `access_request_ignored_existing` | debug | `telegramUserId`, `status` |
 | `access_approved` | info | `telegramUserId`, `decidedBy` |
 | `access_denied` | info | `telegramUserId`, `decidedBy` |
-| `access_dropped_silently` | debug | `telegramUserId`, `status` |
+| `access_decision_rejected_not_owner` | warn | `telegramUserId`, `decision`, `fromTelegramUserId` |
+| `access_dropped_silently` | debug | `telegramUserId`, `status`, optional `callbackKind` |
 | `cost_cap_hit` | warn | `telegramUserId`, `dailyCostUsd`, `capUsd` |
 | `group_chat_rejected` | info | `chatId`, `chatType` |
+| `leave_chat_failed` | warn | `err` |
+| `render_failed` | error | `telegramUserId`, `err` |
+| `persist_failed` | error | `telegramUserId`, `err` |
+| `unhandled_bot_error` | error | `err` |
 
 ### Testing
 

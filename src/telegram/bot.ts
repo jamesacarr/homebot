@@ -59,7 +59,7 @@ export function createBot(deps: CreateBotDeps): Bot {
       try {
         await ctx.leaveChat();
       } catch (error) {
-        log.warn({ err: error }, 'group_chat_rejected');
+        log.warn({ err: error }, 'leave_chat_failed');
       }
       return;
     }
