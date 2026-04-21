@@ -1,8 +1,8 @@
 # homebot
 
 A small Telegram bot that takes natural-language media requests and forwards
-them to a home [Overseerr](https://overseerr.dev/) instance. Runs as a
-container alongside the existing media-services stack on a NAS.
+them to a self-hosted [Overseerr](https://overseerr.dev/) instance. Runs as
+a container alongside Overseerr in a Docker Compose stack.
 
 > *User:* can you add The Bear to the server?
 > *Bot:* Sure! Requested **The Bear (2022)** — full series. ✓
@@ -78,10 +78,11 @@ Mirror of [`src/config.ts`](./src/config.ts) and [`.env.example`](./.env.example
 ## Deployment
 
 The bot ships as a Docker image from GHCR (`ghcr.io/jamesacarr/homebot:latest`)
-and plugs into an existing NAS compose stack on the `media-net` network.
-There's no separate `docker-compose.yml` in this repo by design — the
-service block below is the source of truth; copy it into your stack's
-compose file.
+and is designed to plug into an existing Docker Compose stack on the same
+network as Overseerr. There's no separate `docker-compose.yml` in this repo
+by design — the service block below is the source of truth; copy it into
+your stack's compose file and adjust paths and network names to match your
+setup.
 
 ```yaml
 homebot:
@@ -108,18 +109,20 @@ homebot:
   restart: always
   volumes:
     - /etc/localtime:/etc/localtime
-    - /share/Docker/Homebot/data:/data
+    - /var/lib/homebot/data:/data
 ```
 
-Secrets come from the NAS's own `.env` file via `${HOMEBOT_*}` substitutions
-— same convention as the rest of the stack. Nothing secret is ever pasted
-inline, committed, or rebuilt into the image.
+Secrets come from the compose stack's `.env` file via `${HOMEBOT_*}`
+substitutions. Adjust the substitution names to match your existing
+convention; nothing secret should ever be pasted inline or committed.
 
 ### Volume layout
 
-- `/share/Docker/Homebot/data` on the host ↔ `/data` in the container.
-  Holds `homebot.db` (SQLite). The default `DB_PATH` assumes this mount,
-  so you don't need to set it unless you're relocating the file.
+- `/var/lib/homebot/data` on the host (adjust to wherever you keep
+  persistent service data) ↔ `/data` in the container. Holds `homebot.db`
+  (SQLite). The default `DB_PATH` points at `/data/homebot.db`, so you
+  don't need to set it unless you're relocating the file inside the
+  container.
 
 ### Health endpoint
 
@@ -129,15 +132,16 @@ exposing `GET /health`. Bound to loopback; not reachable from `media-net`
 200 when grammY is polling **and** the DB answers `SELECT 1`; otherwise
 503 with a JSON body naming the failed check.
 
-### `:latest` + Watchtower
+### `:latest` + auto-pull tooling
 
-The tag is `:latest` and the stack runs Watchtower, matching every other
-service on the NAS. Consequence: a bad release pulls automatically, there
+The example block uses `image: ...:latest` for convenience with auto-pull
+tooling like [Watchtower](https://containrrr.dev/watchtower/). If you do
+run something similar, be aware: a bad release pulls automatically, there
 is no staging gate, and you'll only notice via the healthcheck flapping or
-users complaining. That's an accepted trade-off for a home bot used by a
-handful of people. If that stops being acceptable, pin to a `sha-<short>`
-tag (CI publishes both) and remove the container from Watchtower's
-watchlist.
+users complaining. For a small self-hosted bot used by a handful of people
+that's usually an acceptable trade-off. If it isn't, pin to a `sha-<short>`
+tag (CI publishes both) and exclude the container from whatever auto-pull
+tool you use.
 
 ## Local development
 

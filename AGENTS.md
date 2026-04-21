@@ -10,8 +10,9 @@ individual decisions lives in the relevant commit messages.
 ## What this project is
 
 A small Telegram bot that accepts natural-language media requests and forwards
-them to a home Overseerr instance. Runs as a container on the home NAS. Used
-by a handful of family/friends. Low traffic (~10 messages/week).
+them to a self-hosted Overseerr instance. Runs as a container in a Docker
+Compose stack. Used by a handful of family/friends. Low traffic (~10
+messages/week).
 
 ## Load-bearing security boundary — READ THIS
 
@@ -192,8 +193,8 @@ the message. Both must pass before the commit lands.
   (`build-base`, `python3`) for better-sqlite3; production stage is bare
   `node:24-alpine` with `curl` added for the compose-level healthcheck.
 - Runs as non-root user `homebot`.
-- No `HEALTHCHECK` instruction in the Dockerfile — the NAS compose file owns
-  that, matching the pattern used by every other service in the stack.
+- No `HEALTHCHECK` instruction in the Dockerfile — the compose file owns
+  that.
 - Production image expects `/data` to be a mounted volume containing the
   SQLite file.
 
