@@ -6,7 +6,7 @@ import type { OverseerrMediaType } from './overseerr/client.js';
  *
  * - `pick:<tmdbId>:<mediaType>` for the disambiguation picker.
  * - `approve:<requesterId>` and `deny:<requesterId>` for owner-driven access
- *   decisions; defensive `from.id === OWNER_TELEGRAM_USER_ID` enforcement
+ *   decisions; defensive `from.id === TELEGRAM_OWNER_ID` enforcement
  *   lives in the handler.
  * - `access_request` (no payload) for the unknown-user "request access" tap.
  */

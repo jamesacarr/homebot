@@ -8,8 +8,8 @@ const completeEnv = {
   LLM_PROVIDER: 'anthropic',
   OVERSEERR_API_KEY: 'over-test',
   OVERSEERR_URL: 'http://overseerr:5055',
-  OWNER_TELEGRAM_USER_ID: '12345',
   TELEGRAM_BOT_TOKEN: 'tg-test',
+  TELEGRAM_OWNER_ID: '12345',
 };
 
 describe('loadConfig', () => {
@@ -33,10 +33,10 @@ describe('loadConfig', () => {
 
   it('throws listing every missing required field by env var name', () => {
     const requiredVars = [
-      'TELEGRAM_BOT_TOKEN',
       'OVERSEERR_URL',
       'OVERSEERR_API_KEY',
-      'OWNER_TELEGRAM_USER_ID',
+      'TELEGRAM_BOT_TOKEN',
+      'TELEGRAM_OWNER_ID',
       'LLM_PROVIDER',
       'LLM_MODEL',
     ];
@@ -55,9 +55,9 @@ describe('loadConfig', () => {
 
     expect(caught).toBeInstanceOf(ConfigError);
     const issues = (caught as ConfigError).issues;
-    expect(
-      issues.find(i => i.envVar === 'OWNER_TELEGRAM_USER_ID')?.message,
-    ).toBe('Required');
+    expect(issues.find(i => i.envVar === 'TELEGRAM_OWNER_ID')?.message).toBe(
+      'Required',
+    );
     expect(issues.find(i => i.envVar === 'TELEGRAM_BOT_TOKEN')?.message).toBe(
       'Required',
     );

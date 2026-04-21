@@ -27,7 +27,7 @@ Feature-complete for v1. Not yet deployed.
 - **LLM provider API key** — Anthropic, OpenAI, Groq, etc. pi-ai resolves
   the key by provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …).
 - **Your numeric Telegram user ID** — any bot like [@userinfobot](https://t.me/userinfobot)
-  will tell you. This is `OWNER_TELEGRAM_USER_ID`; owner bypasses the daily
+  will tell you. This is `TELEGRAM_OWNER_ID`; owner bypasses the daily
   cost cap and is the only user who can approve access requests.
 
 ### One-time Telegram setup
@@ -37,7 +37,7 @@ Feature-complete for v1. Not yet deployed.
   stops Telegram from delivering group messages in the first place. The bot
   also leaves any group it's added to as a belt-and-braces check.
 - **Owner must DM the bot before first startup.** One of the startup sanity
-  checks is `getChat(OWNER_TELEGRAM_USER_ID)`, which fails until Telegram
+  checks is `getChat(TELEGRAM_OWNER_ID)`, which fails until Telegram
   knows the owner-↔-bot chat exists. Send the bot any message (e.g. `/start`)
   once from your own Telegram account before deploying. The sanity-check
   error hints at this explicitly, but it's easier to get right the first
@@ -51,10 +51,10 @@ Mirror of [`src/config.ts`](./src/config.ts) and [`.env.example`](./.env.example
 
 | Variable | Description |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | From BotFather. |
 | `OVERSEERR_URL` | e.g. `http://overseerr:5055` (inside the compose network). |
 | `OVERSEERR_API_KEY` | From Overseerr → *Settings → General*. |
-| `OWNER_TELEGRAM_USER_ID` | Your numeric Telegram user ID. |
+| `TELEGRAM_BOT_TOKEN` | From BotFather. |
+| `TELEGRAM_OWNER_ID` | Your numeric Telegram user ID. |
 | `LLM_PROVIDER` | pi-ai provider key: `anthropic`, `openai`, `groq`, … |
 | `LLM_MODEL` | pi-ai model id, e.g. `claude-haiku-4-5`. |
 | `<PROVIDER>_API_KEY` | Matches `LLM_PROVIDER`, e.g. `ANTHROPIC_API_KEY`. |
@@ -90,14 +90,14 @@ homebot:
   depends_on:
     - overseerr
   environment:
-    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
-    OVERSEERR_URL: http://overseerr:5055
-    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
-    OWNER_TELEGRAM_USER_ID: ${HOMEBOT_OWNER_TELEGRAM_USER_ID}
+    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
     LLM_PROVIDER: anthropic
     LLM_MODEL: claude-haiku-4-5
     LLM_THINKING_LEVEL: "off"
-    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
+    OVERSEERR_URL: http://overseerr:5055
+    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
+    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
+    TELEGRAM_OWNER_ID: ${HOMEBOT_TELEGRAM_OWNER_ID}
     TZ: ${TIMEZONE}
   healthcheck:
     test: [ "CMD", "curl", "--fail", "http://127.0.0.1:3000/health" ]
@@ -148,7 +148,7 @@ required.
 pnpm install
 cp .env.example .env
 # Fill in TELEGRAM_BOT_TOKEN, OVERSEERR_URL, OVERSEERR_API_KEY,
-# OWNER_TELEGRAM_USER_ID, LLM_PROVIDER, LLM_MODEL, and the matching
+# TELEGRAM_OWNER_ID, LLM_PROVIDER, LLM_MODEL, and the matching
 # <PROVIDER>_API_KEY. Point OVERSEERR_URL and DB_PATH at whatever is
 # reachable from your dev machine.
 

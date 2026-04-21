@@ -14,12 +14,12 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 const REQUIRED_ENV_VARS = [
-  'TELEGRAM_BOT_TOKEN',
-  'OVERSEERR_URL',
-  'OVERSEERR_API_KEY',
-  'OWNER_TELEGRAM_USER_ID',
   'LLM_PROVIDER',
   'LLM_MODEL',
+  'OVERSEERR_URL',
+  'OVERSEERR_API_KEY',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_OWNER_ID',
 ] as const;
 
 // Schema runs AFTER required-presence checks in loadConfig, so every field
@@ -51,7 +51,7 @@ const ENV_VAR_BY_KEY: Record<keyof Config, string> = {
   maxTurnsInHistory: 'MAX_TURNS_IN_HISTORY',
   overseerrApiKey: 'OVERSEERR_API_KEY',
   overseerrUrl: 'OVERSEERR_URL',
-  ownerTelegramUserId: 'OWNER_TELEGRAM_USER_ID',
+  ownerTelegramUserId: 'TELEGRAM_OWNER_ID',
   telegramBotToken: 'TELEGRAM_BOT_TOKEN',
 };
 
@@ -85,7 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     maxTurnsInHistory: emptyToUndefined(env.MAX_TURNS_IN_HISTORY),
     overseerrApiKey: emptyToUndefined(env.OVERSEERR_API_KEY),
     overseerrUrl: emptyToUndefined(env.OVERSEERR_URL),
-    ownerTelegramUserId: emptyToUndefined(env.OWNER_TELEGRAM_USER_ID),
+    ownerTelegramUserId: emptyToUndefined(env.TELEGRAM_OWNER_ID),
     telegramBotToken: emptyToUndefined(env.TELEGRAM_BOT_TOKEN),
   };
 

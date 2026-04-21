@@ -190,7 +190,7 @@ If `PENDING` or `PROCESSING`:
 6. Rate limit: while `status='pending'` or `status='denied'`, all messages
    from that user are silently dropped. No cooldown env var — the status is
    the gate.
-7. The approve/deny handler **defensively checks** `ctx.from.id === OWNER_TELEGRAM_USER_ID` before acting, even though the message is DM'd to owner only.
+7. The approve/deny handler **defensively checks** `ctx.from.id === TELEGRAM_OWNER_ID` before acting, even though the message is DM'd to owner only.
 
 ### Group chats
 
@@ -332,10 +332,10 @@ Required:
 
 | Var | Description |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | From BotFather. |
 | `OVERSEERR_URL` | e.g. `http://overseerr:5055`. |
 | `OVERSEERR_API_KEY` | From Overseerr settings. |
-| `OWNER_TELEGRAM_USER_ID` | Owner's numeric Telegram user ID. |
+| `TELEGRAM_BOT_TOKEN` | From BotFather. |
+| `TELEGRAM_OWNER_ID` | Owner's numeric Telegram user ID. |
 | `LLM_PROVIDER` | pi-ai provider key, e.g. `anthropic`, `openai`, `groq`. |
 | `LLM_MODEL` | pi-ai model ID, e.g. `claude-sonnet-4-5`. |
 | `<PROVIDER>_API_KEY` | e.g. `ANTHROPIC_API_KEY`. pi-ai resolves these by provider. |
@@ -357,7 +357,7 @@ Run before `bot.start()`, fail-fast with a clear error message if any fails:
 1. DB file is writable; migrations run clean.
 2. Overseerr `/api/v1/status` answers within 5s.
 3. Telegram `bot.api.getMe()` succeeds (token valid).
-4. Telegram `bot.api.getChat(OWNER_TELEGRAM_USER_ID)` resolves (owner ID is a
+4. Telegram `bot.api.getChat(TELEGRAM_OWNER_ID)` resolves (owner ID is a
    real user the bot can reach).
 
 Fail-fast is important — any of these being wrong means silent runtime
@@ -407,7 +407,7 @@ that `telegram_user_id` beyond the most recent `MAX_TURNS_IN_HISTORY`. Both
 statements in one transaction.
 
 The owner's ID is **not** in `users`. Owner is infrastructure config
-(`OWNER_TELEGRAM_USER_ID`), not user data.
+(`TELEGRAM_OWNER_ID`), not user data.
 
 ### `messages_json` schema versioning
 
@@ -678,14 +678,14 @@ homebot:
   depends_on:
     - overseerr
   environment:
-    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
-    OVERSEERR_URL: http://overseerr:5055
-    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
-    OWNER_TELEGRAM_USER_ID: ${HOMEBOT_OWNER_TELEGRAM_USER_ID}
+    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
     LLM_PROVIDER: anthropic
     LLM_MODEL: claude-haiku-4-5
     LLM_THINKING_LEVEL: "off"
-    ANTHROPIC_API_KEY: ${HOMEBOT_ANTHROPIC_API_KEY}
+    OVERSEERR_URL: http://overseerr:5055
+    OVERSEERR_API_KEY: ${HOMEBOT_OVERSEERR_API_KEY}
+    TELEGRAM_BOT_TOKEN: ${HOMEBOT_TELEGRAM_BOT_TOKEN}
+    TELEGRAM_OWNER_ID: ${HOMEBOT_TELEGRAM_OWNER_ID}
     TZ: ${TIMEZONE}
   healthcheck:
     test: [ "CMD", "curl", "--fail", "http://127.0.0.1:3000/health" ]
