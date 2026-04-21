@@ -16,6 +16,13 @@ import type { Logger } from '../logging.js';
  */
 export interface AccessAdapter {
   send(chatId: number, replies: Reply[]): Promise<void>;
+  /**
+   * Replace the text of an existing message and clear its inline keyboard.
+   * Used to neuter the approve/deny buttons on the owner's DM once the
+   * decision has been applied. The implementation is expected to drop the
+   * `reply_markup` on the edit.
+   */
+  editMessage(chatId: number, messageId: number, text: string): Promise<void>;
 }
 
 export interface HandleAccessRequestInput {
@@ -137,6 +144,13 @@ export interface HandleAccessDecisionInput {
   db: AppDb;
   adapter: AccessAdapter;
   logger: Logger;
+  /**
+   * Chat and message the decision tap came from. After the decision is
+   * applied we edit this message to strip the inline keyboard so a stale
+   * re-tap can't drive the handler a second time.
+   */
+  sourceChatId: number;
+  sourceMessageId: number;
 }
 
 export type AccessDecisionResult =
@@ -210,6 +224,25 @@ export async function handleAccessDecision(
     await input.adapter.send(input.requesterTelegramUserId, [
       { kind: 'text', text: 'Access denied.' },
     ]);
+  }
+
+  // Cosmetic tidy-up on the owner's DM — mustn't flip the decision result
+  // if it fails. A 400 here is common for messages older than Telegram's
+  // 48h edit window, and that's fine: the DB write and requester DM have
+  // already succeeded.
+  const verb = input.decision === 'approve' ? 'Approved' : 'Denied';
+  const emoji = input.decision === 'approve' ? '✓' : '✗';
+  const display = before.telegramUsername
+    ? `@${before.telegramUsername} (\`${input.requesterTelegramUserId}\`)`
+    : `user \`${input.requesterTelegramUserId}\``;
+  try {
+    await input.adapter.editMessage(
+      input.sourceChatId,
+      input.sourceMessageId,
+      `${emoji} ${verb} ${display}`,
+    );
+  } catch (error) {
+    input.logger.debug({ err: error }, 'access_source_edit_failed');
   }
 
   return 'applied';

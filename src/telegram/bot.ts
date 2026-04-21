@@ -187,6 +187,14 @@ export function createBot(deps: CreateBotDeps): Bot {
     // itself enforces `from === owner`.
 
     const adapter: AccessAdapter = {
+      editMessage: async (targetChatId, messageId, text) => {
+        // Omitting `reply_markup` tells Telegram to drop any existing
+        // inline keyboard on the edited message — which is exactly what
+        // we want after a decision. Passing plain text (no MarkdownV2)
+        // keeps the one-line confirmation literal; the handler's
+        // wording doesn't need escape-pass gymnastics.
+        await ctx.api.editMessageText(targetChatId, messageId, text);
+      },
       send: (toId, replies) =>
         renderReplies(asTelegramOutboundApi(ctx.api), toId, replies),
     };
@@ -209,6 +217,17 @@ export function createBot(deps: CreateBotDeps): Bot {
     }
 
     if (decoded.kind === 'approve' || decoded.kind === 'deny') {
+      const sourceMessageId = ctx.callbackQuery.message?.message_id;
+      if (sourceMessageId === undefined) {
+        // Shouldn't happen for a button tap — the callback_query always
+        // carries the originating message — but without it we can't
+        // neuter the keyboard, so refuse rather than half-apply.
+        log.warn(
+          { telegramUserId: fromId },
+          'access_decision_missing_source_message',
+        );
+        return;
+      }
       await handleAccessDecision({
         adapter,
         db: deps.db,
@@ -218,6 +237,8 @@ export function createBot(deps: CreateBotDeps): Bot {
         now: now(),
         ownerTelegramUserId: deps.ownerTelegramUserId,
         requesterTelegramUserId: decoded.requesterId,
+        sourceChatId: chatId,
+        sourceMessageId,
       });
       return;
     }

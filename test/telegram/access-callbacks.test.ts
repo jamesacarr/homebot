@@ -4,6 +4,7 @@ import type { AppDb } from '../../src/db/index.js';
 import { findUser, recordAccessRequest } from '../../src/db/users.js';
 import type { Reply } from '../../src/llm/orchestrator.js';
 import { silentLogger } from '../../src/logging.js';
+import type { AccessAdapter } from '../../src/telegram/access-callbacks.js';
 import {
   handleAccessDecision,
   handleAccessRequest,
@@ -13,24 +14,40 @@ import { createTestDb } from '../db/helper.js';
 const OWNER_ID = 11111;
 const REQUESTER_ID = 22222;
 const STRANGER_ID = 33333;
+const SOURCE_MESSAGE_ID = 99;
 
 interface SentDm {
   chatId: number;
   replies: Reply[];
 }
+interface EditedMessage {
+  chatId: number;
+  messageId: number;
+  text: string;
+}
 
-function makeAdapter(): {
-  adapter: { send: (chatId: number, replies: Reply[]) => Promise<void> };
+interface AdapterHarness {
+  adapter: AccessAdapter;
   sent: SentDm[];
-} {
+  edits: EditedMessage[];
+}
+
+function makeAdapter(options: { editRejects?: boolean } = {}): AdapterHarness {
   const sent: SentDm[] = [];
-  const adapter = {
-    send: (chatId: number, replies: Reply[]) => {
+  const edits: EditedMessage[] = [];
+  const adapter: AccessAdapter = {
+    editMessage: (chatId, messageId, text) => {
+      edits.push({ chatId, messageId, text });
+      return options.editRejects
+        ? Promise.reject(new Error('message is too old to edit'))
+        : Promise.resolve();
+    },
+    send: (chatId, replies) => {
       sent.push({ chatId, replies });
       return Promise.resolve();
     },
   };
-  return { adapter, sent };
+  return { adapter, edits, sent };
 }
 
 let db: AppDb;
@@ -166,8 +183,8 @@ describe('handleAccessDecision', () => {
     });
   });
 
-  it('approves the user, flips the row to approved, and DMs the requester', async () => {
-    const { adapter, sent } = makeAdapter();
+  it('approves the user, flips the row to approved, DMs the requester, and clears the source keyboard', async () => {
+    const { adapter, edits, sent } = makeAdapter();
 
     const result = await handleAccessDecision({
       adapter,
@@ -178,6 +195,8 @@ describe('handleAccessDecision', () => {
       now: 999,
       ownerTelegramUserId: OWNER_ID,
       requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: OWNER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID,
     });
 
     expect(result).toBe('applied');
@@ -190,10 +209,19 @@ describe('handleAccessDecision', () => {
       throw new Error('expected text DM for requester');
     }
     expect(dm.replies[0].text).toMatch(/granted|approved/i);
+
+    // The approve/deny keyboard on the owner's DM must be cleared so a
+    // stale re-tap can't drive the handler a second time and so the
+    // owner can see at a glance which decision they made.
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.chatId).toBe(OWNER_ID);
+    expect(edits[0]?.messageId).toBe(SOURCE_MESSAGE_ID);
+    expect(edits[0]?.text).toMatch(/approved/i);
+    expect(edits[0]?.text).toContain('jane');
   });
 
-  it('denies the user, flips the row to denied, and DMs the requester', async () => {
-    const { adapter, sent } = makeAdapter();
+  it('denies the user, flips the row to denied, DMs the requester, and clears the source keyboard', async () => {
+    const { adapter, edits, sent } = makeAdapter();
 
     await handleAccessDecision({
       adapter,
@@ -204,6 +232,8 @@ describe('handleAccessDecision', () => {
       now: 999,
       ownerTelegramUserId: OWNER_ID,
       requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: OWNER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID,
     });
 
     const row = await findUser(db, REQUESTER_ID);
@@ -214,13 +244,41 @@ describe('handleAccessDecision', () => {
       throw new Error('expected text DM for requester');
     }
     expect(dm.replies[0].text).toMatch(/denied/i);
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.text).toMatch(/denied/i);
   });
 
-  it('rejects a decision tap from anyone other than the owner without writing or DM-ing', async () => {
+  it('still reports applied when clearing the source keyboard fails (e.g. message too old)', async () => {
+    // The DB write and requester DM have already succeeded; an edit
+    // failure on the owner's stale message is cosmetic and must not
+    // flip the decision result or swallow the outbound DM.
+    const { adapter, sent } = makeAdapter({ editRejects: true });
+
+    const result = await handleAccessDecision({
+      adapter,
+      db,
+      decision: 'approve',
+      fromTelegramUserId: OWNER_ID,
+      logger: silentLogger,
+      now: 999,
+      ownerTelegramUserId: OWNER_ID,
+      requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: OWNER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID,
+    });
+
+    expect(result).toBe('applied');
+    const row = await findUser(db, REQUESTER_ID);
+    expect(row?.status).toBe('approved');
+    expect(sent.some(s => s.chatId === REQUESTER_ID)).toBe(true);
+  });
+
+  it('rejects a decision tap from anyone other than the owner without writing, DM-ing, or editing', async () => {
     // Defensive belt-and-braces — even though the message is
     // DM'd to owner only, an attacker who learned the callback_data format
     // must not be able to approve themselves.
-    const { adapter, sent } = makeAdapter();
+    const { adapter, edits, sent } = makeAdapter();
 
     const result = await handleAccessDecision({
       adapter,
@@ -231,15 +289,18 @@ describe('handleAccessDecision', () => {
       now: 999,
       ownerTelegramUserId: OWNER_ID,
       requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: STRANGER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID,
     });
 
     expect(result).toBe('rejected_not_owner');
     const row = await findUser(db, REQUESTER_ID);
     expect(row?.status).toBe('pending');
     expect(sent).toHaveLength(0);
+    expect(edits).toHaveLength(0);
   });
 
-  it('is idempotent for an already-decided user (does not re-DM)', async () => {
+  it('is idempotent for an already-decided user (does not re-DM or re-edit)', async () => {
     // First approval.
     const first = makeAdapter();
     await handleAccessDecision({
@@ -251,6 +312,8 @@ describe('handleAccessDecision', () => {
       now: 999,
       ownerTelegramUserId: OWNER_ID,
       requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: OWNER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID,
     });
 
     // Second approval — should be a no-op since status is no longer pending.
@@ -264,9 +327,12 @@ describe('handleAccessDecision', () => {
       now: 1000,
       ownerTelegramUserId: OWNER_ID,
       requesterTelegramUserId: REQUESTER_ID,
+      sourceChatId: OWNER_ID,
+      sourceMessageId: SOURCE_MESSAGE_ID + 1,
     });
 
     expect(result).toBe('noop_already_decided');
     expect(second.sent).toHaveLength(0);
+    expect(second.edits).toHaveLength(0);
   });
 });
