@@ -1,4 +1,4 @@
-import { getModel } from '@mariozechner/pi-ai';
+import type { Api, Model } from '@mariozechner/pi-ai';
 
 import { loadConfig } from './config.js';
 import { createDb, runMigrations } from './db/index.js';
@@ -9,6 +9,7 @@ import { createToolDispatcher } from './llm/tools.js';
 import type { LogLevel } from './logging.js';
 import { createLogger } from './logging.js';
 import { createOverseerrClient } from './overseerr/client.js';
+import { ModelResolutionError, resolveModel } from './resolve-model.js';
 import { runSanityChecks, SanityCheckError } from './sanity-checks.js';
 import { createBot } from './telegram/bot.js';
 
@@ -27,12 +28,21 @@ async function main(): Promise<void> {
     baseUrl: config.overseerrUrl,
   });
 
-  // pi-ai's `getModel` requires literal types for full inference. We type-cast
-  // because provider/model come from runtime config.
-  const llmModel = getModel(
-    config.llmProvider as never,
-    config.llmModel as never,
-  );
+  // Look up the pi-ai Model by runtime string. `resolveModel` validates
+  // both the provider and the model id against pi-ai's registry and throws
+  // a descriptive ModelResolutionError if either is wrong — no `as never`
+  // casts leaking out into the entry point.
+  let llmModel: Model<Api>;
+  try {
+    llmModel = resolveModel(config.llmProvider, config.llmModel);
+  } catch (error) {
+    if (error instanceof ModelResolutionError) {
+      logger.error({ err: error.message }, 'startup');
+    } else {
+      logger.error({ err: error }, 'startup');
+    }
+    process.exit(1);
+  }
 
   const orchestrate = createOrchestrator({
     llmModel,
@@ -94,7 +104,10 @@ async function main(): Promise<void> {
     {
       llmModel: config.llmModel,
       llmProvider: config.llmProvider,
-      version: process.env.npm_package_version ?? 'dev',
+      // `VERSION` is set by the Docker build so operators can tell which
+      // image is running. Fall back to a placeholder for local `pnpm dev`
+      // runs where no VERSION is injected.
+      version: process.env.VERSION ?? 'dev',
     },
     'startup',
   );
