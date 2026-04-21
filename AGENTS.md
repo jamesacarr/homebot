@@ -112,6 +112,7 @@ inline.
 | `render_failed` | error | `telegramUserId`, `err` |
 | `persist_failed` | error | `telegramUserId`, `err` |
 | `unhandled_bot_error` | error | `err` |
+| `typing_action_failed` | debug | `err` (caller binds `telegramUserId` via child logger) |
 
 ### Testing
 
